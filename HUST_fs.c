@@ -5,12 +5,65 @@
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/fs.h>
+#include <linux/init.h>
+#include <linux/module.h>
+#include <linux/fs.h>
+#include <linux/string.h>
+#include <linux/uaccess.h>
+#include <linux/buffer_head.h>
+
+static ssize_t
+HUST_fs_read(struct file *filp, char __user *buf, size_t len, loff_t *ppos)
+{
+    struct buffer_head *bh;
+    sector_t at_block;
+    loff_t into_block;
+    unsigned long c2u_ret, c2u_len;
+
+    if(*ppos >= filp->f_inode->i_size)
+        return 0;
+    at_block = (*ppos >> 12) +1;
+    into_block = *ppos - ((*ppos >> 12) << 12);
+    c2u_len = min((loff_t)len, 4096 - into_block);
+    c2u_len = min((loff_t)c2u_len, filp->f_inode->i_size - *ppos);
+
+    printk(KERN_INFO "read block %lu, offset in block %llu, returning %lu bytes\n",
+           at_block, into_block, c2u_len);
+    
+    bh = sb_bread(filp->f_inode->i_sb, at_block);
+    if (!bh){
+        printk(KERN_ERR "Error reading block %lu\n", at_block);
+        return -EFAULT;
+    }
+    c2u_ret = copy_to_user(buf, bh->b_data + into_block, c2u_len);
+    brelse(bh);
+    if (c2u_ret)
+    {
+        printk(KERN_ERR "Error in copy_to_user()\n");
+        return -EFAULT;
+    }
+
+    *ppos += c2u_len;
+    return c2u_len;
+}
+
+static const struct file_operations HUST_fs_file_ops = {
+    .owner = THIS_MODULE,
+    .llseek = generic_file_llseek,
+    .mmap = generic_file_mmap,
+    .read = HUST_fs_read,
+};
 
 static int
 HUST_fs_iterate(struct file *filp, struct dir_context *ctx)
 {
     /* Emit the standard entries "." and ".." and quit. */
     dir_emit_dots(filp, ctx);
+    if (ctx->pos == 2)
+    {
+        dir_emit(ctx, "file", 4, 2, DT_REG);
+        ctx->pos++;
+    }
     return 0;
 }
 
@@ -23,11 +76,47 @@ static struct dentry *
 HUST_fs_lookup(struct inode *parent_inode, struct dentry *child_dentry,
                    unsigned int flags)
 {
-    /* We don't do anything here, but it's important that this operation
-     * is defined in inode->i_op. See vfs.txt in the kernel docs on what
-     * this function usually does. */
-    printk(KERN_INFO "lookup called unexpectedly with %p, %p, and %u\n",
-           parent_inode, child_dentry, flags);
+    struct inode *inode;
+    struct buffer_head *bh;
+    uint64_t filesize;
+
+    printk(KERN_INFO "lookup:[%s]\n", child_dentry->d_name.name);
+
+    if (strcmp(child_dentry->d_name.name, "file") != 0) {
+        printk(KERN_ERR "lookup:no inode for [%s] found\n",
+            child_dentry->d_name.name);
+        d_add(child_dentry, NULL);
+        return NULL;
+    }
+
+    inode = iget_locked(parent_inode->i_sb, "file");
+    if(!inode) {
+        printk(KERN_ERR "lookup: iget_locked() return NULL\n");
+        return ERR_PTR(-ENOMEM);
+    }
+
+    if(inode->i_state &I_NEW) {
+        bh = sb_bread(parent_inode->i_sb, 0);
+        if (!bh) {
+            printk(KERN_ERR "lookup: sb_bread for block 0 failed\n");
+            return ERR_PTR(-EFAULT);
+        }
+        filesize = ((uint64_t *)bh->b_data)[0];
+        brelse(bh);
+
+        inode_init_owner(inode, parent_inode, S_IFREG |
+                         S_IRUSR | S_IXUSR |
+                         S_IRGRP | S_IXGRP |
+                         S_IROTH | S_IXOTH);
+        inode->i_ino = 2;
+        inode->i_atime = inode->i_mtime = inode->i_ctime =current_time(inode);
+        inode->i_size = (loff_t)filesize;
+        inode->i_fop = &HUST_fs_file_ops;
+
+        unlock_new_inode(inode);
+    }
+
+    d_add(child_dentry, inode);
     return NULL;
 }
 
@@ -35,13 +124,18 @@ static const struct inode_operations HUST_fs_inode_ops = {
     .lookup = HUST_fs_lookup,
 };
 
-/* Called as a callback function by mount_bdev(). We don't read anything
- * from disk but construct a "virtual" root inode on the fly. We also
- * make that root inode available in our superblock struct. */
+
 static int
 HUST_fs_fill_super(struct super_block *sb, void *data, int silent)
 {
     struct inode *root_inode;
+
+    if (sb->s_blocksize != 4096)
+    {
+        printk(KERN_ERR "onefilerofs expects a blocksize of %d\n", 4096);
+        return -EFAULT;
+    }
+    printk(KERN_INFO "onefilerofs: blocksize is %lu, okay\n", sb->s_blocksize);
 
     root_inode = new_inode(sb);
     if (!root_inode)
@@ -50,7 +144,11 @@ HUST_fs_fill_super(struct super_block *sb, void *data, int silent)
     /* Our root inode. It doesn't contain useful information for now.
      * Note that i_ino must not be 0, since valid inode numbers start at
      * 1. */
-    inode_init_owner(root_inode, NULL, S_IFDIR | S_IRWXU | S_IRWXG | S_IRWXO);
+    inode_init_owner(root_inode, NULL, S_IFDIR | 
+                     S_IRUSR | S_IXUSR |
+                     S_IRGRP | S_IXGRP |
+                     S_IROTH | S_IXOTH);
+
     root_inode->i_ino = 1;
     root_inode->i_atime = root_inode->i_mtime = root_inode->i_ctime =
                           current_time(root_inode);
