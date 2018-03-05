@@ -22,8 +22,10 @@ HUST_fs_read(struct file *filp, char __user *buf, size_t len, loff_t *ppos)
 
     if(*ppos >= filp->f_inode->i_size)
         return 0;
+
     at_block = (*ppos >> 12) +1;
     into_block = *ppos - ((*ppos >> 12) << 12);
+
     c2u_len = min((loff_t)len, 4096 - into_block);
     c2u_len = min((loff_t)c2u_len, filp->f_inode->i_size - *ppos);
 
