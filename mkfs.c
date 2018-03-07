@@ -20,13 +20,8 @@
 #include <fcntl.h>
 #include <string.h>
 
-#define BLOCKSIZE 4096
-#define MAGIC_NUM 1314522
-#define HUST_N_BLOCKS 10
-#define HUST_INODE_TABLE_START_IDX 4
-#define HUST_ROOT_INODE_NUM 0
-#define HUST_FILENAME_MAX_LEN 256
-#define RESERVE_BLOCKS 2 //dummy and sb
+#include "constants.h"
+
 static uint8_t* bmap;
 static uint8_t* imap;
 static uint64_t disk_size;
@@ -86,7 +81,7 @@ static int set_bmap(uint64_t idx, int value)
 	}
 	uint64_t array_idx = idx/(sizeof(char)*8);
 	uint64_t off = idx%(sizeof(char)*8);
-	if(array_idx > bmap_size*BLOCKSIZE) {
+	if(array_idx > bmap_size*HUST_BLOCKSIZE) {
 		printf("Set bmap error and idx is %llu\n", idx);
 		return -1;
 	}
@@ -105,34 +100,34 @@ static int init_disk(int fd, const char* path)
 	}
 	printf("Disk size id %lu\n", disk_size);
 	super_block.version = 1;
-	super_block.block_size = BLOCKSIZE;
+	super_block.block_size = HUST_BLOCKSIZE;
 	super_block.magic = MAGIC_NUM;
-	super_block.blocks_count = disk_size/BLOCKSIZE;
+	super_block.blocks_count = disk_size/HUST_BLOCKSIZE;
 	printf("blocks count is %llu\n", super_block.blocks_count);
 	super_block.inodes_count = super_block.blocks_count;
 	super_block.free_blocks = 0;
 	//计算bmap
-	bmap_size = super_block.blocks_count/(8*BLOCKSIZE);
+	bmap_size = super_block.blocks_count/(8*HUST_BLOCKSIZE);
 	super_block.bmap_block = RESERVE_BLOCKS;
 
-	if (super_block.blocks_count%(8*BLOCKSIZE) != 0) {
+	if (super_block.blocks_count%(8*HUST_BLOCKSIZE) != 0) {
 		bmap_size += 1;
 	}
-	bmap = (uint8_t *)malloc(bmap_size*BLOCKSIZE);
-	memset(bmap,0,bmap_size*BLOCKSIZE);
+	bmap = (uint8_t *)malloc(bmap_size*HUST_BLOCKSIZE);
+	memset(bmap,0,bmap_size*HUST_BLOCKSIZE);
 
 	//计算imap
-	imap_size = super_block.inodes_count/(8*BLOCKSIZE);
+	imap_size = super_block.inodes_count/(8*HUST_BLOCKSIZE);
 	super_block.imap_block = super_block.bmap_block + bmap_size;
 
-	if(super_block.inodes_count%(8*BLOCKSIZE) != 0) {
+	if(super_block.inodes_count%(8*HUST_BLOCKSIZE) != 0) {
 		imap_size += 1;
 	}
-	imap = (uint8_t *)malloc(imap_size*BLOCKSIZE);
-	memset(imap,0,imap_size*BLOCKSIZE);
+	imap = (uint8_t *)malloc(imap_size*HUST_BLOCKSIZE);
+	memset(imap,0,imap_size*HUST_BLOCKSIZE);
 
 	//计算inode_table
-	inode_table_size = super_block.inodes_count/(BLOCKSIZE/HUST_INODE_SIZE);
+	inode_table_size = super_block.inodes_count/(HUST_BLOCKSIZE/HUST_INODE_SIZE);
 	super_block.inode_table_block = super_block.imap_block + imap_size;
 	super_block.data_block_number = RESERVE_BLOCKS + bmap_size + imap_size + inode_table_size;
 	super_block.free_blocks = super_block.blocks_count - super_block.data_block_number - 1;
@@ -153,7 +148,7 @@ static int write_sb(int fd)
 {
 	ssize_t ret;
 	ret = write(fd, &super_block, sizeof(super_block));
-	if(ret != BLOCKSIZE) {
+	if(ret != HUST_BLOCKSIZE) {
 		perror("Write super block error!\n");
 		return -1;
 	}
@@ -165,8 +160,8 @@ static int write_bmap(int fd)
 {
 	ssize_t ret = -1;
 
-	ret = write(fd, bmap, bmap_size*BLOCKSIZE);
-	if (ret != bmap_size*BLOCKSIZE) {
+	ret = write(fd, bmap, bmap_size*HUST_BLOCKSIZE);
+	if (ret != bmap_size*HUST_BLOCKSIZE) {
 		perror("Write_bmap() error!\n");
 		return -1;
 	}
@@ -175,11 +170,11 @@ static int write_bmap(int fd)
 }
 static int write_imap(int fd)
 {
-	memset(imap, 0, imap_size*BLOCKSIZE);
+	memset(imap, 0, imap_size*HUST_BLOCKSIZE);
 	imap[0] |= 0x1;
 
-	ssize_t res = write(fd, imap, imap_size*BLOCKSIZE);
-	if (res != imap_size*BLOCKSIZE) {
+	ssize_t res = write(fd, imap, imap_size*HUST_BLOCKSIZE);
+	if (res != imap_size*HUST_BLOCKSIZE) {
 		perror("write_imap() erroe!");
 		return -1;
 	}
@@ -214,9 +209,9 @@ static int write_itable(int fd)
 
 	off_t current_off = lseek(fd, 0L, SEEK_CUR);
 	printf("Current seek is %lu and rootdir at %lu\n", current_off
-			, super_block.data_block_number*BLOCKSIZE);
+			, super_block.data_block_number*HUST_BLOCKSIZE);
 
-	if(-1 == lseek(fd, super_block.data_block_number*BLOCKSIZE, SEEK_SET)) {
+	if(-1 == lseek(fd, super_block.data_block_number*HUST_BLOCKSIZE, SEEK_SET)) {
 		perror("lseek error\n");
 		return -1;
 	}
@@ -231,9 +226,9 @@ static int write_itable(int fd)
 }
 static int write_dummy(int fd)
 {
-	char dummy[BLOCKSIZE] = {0};
-	ssize_t res = write(fd, dummy, BLOCKSIZE);
-	if (res != BLOCKSIZE) {
+	char dummy[HUST_BLOCKSIZE] = {0};
+	ssize_t res = write(fd, dummy, HUST_BLOCKSIZE);
+	if (res != HUST_BLOCKSIZE) {
 		perror("write_dummy error!");
 		return -1;
 	}
