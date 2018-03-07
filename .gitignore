@@ -1,4 +1,6 @@
+mkfs
 .idea/
+ref/
 cmake-build-debug/
 # Prerequisites
 *.d

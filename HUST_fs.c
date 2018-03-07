@@ -12,6 +12,78 @@
 #include <linux/uaccess.h>
 #include <linux/buffer_head.h>
 
+#define MAGIC_NUM 1314522
+#define HUST_BLOCKSIZE 4096
+#define HUST_N_BLOCKS 10
+#define HUST_INODE_TABLE_START_IDX 4
+#define HUST_ROOT_INODE_NUM 0
+#define HUST_FILENAME_MAX_LEN 256
+#define RESERVE_BLOCKS 2 //dummy and sb
+
+struct HUST_fs_super_block {
+	uint64_t version;
+	uint64_t magic;
+	uint64_t block_size;
+	uint64_t inodes_count;
+	uint64_t free_blocks;
+	uint64_t blocks_count;
+
+	uint64_t bmap_block;
+	uint64_t imap_block;
+	uint64_t inode_table_block;
+	uint64_t data_block_number;
+	char padding[4016];
+};
+
+struct HUST_inode {
+	mode_t mode;//sizeof(mode_t) is 4
+	uint64_t inode_no;
+	uint64_t blocks;
+	uint64_t block[HUST_N_BLOCKS];
+	union {
+		uint64_t file_size;
+		uint64_t dir_children_count;
+	};
+};
+#define HUST_INODE_SIZE sizeof(struct HUST_inode)
+struct HUST_dir_record {
+	char filename[HUST_FILENAME_MAX_LEN];
+	uint64_t inode_no;
+};
+
+
+static int HUST_fs_get_inode(struct super_block *sb,
+		uint64_t inode_no, struct HUST_inode* inode)
+{
+	if(!inode) {
+		printk(KERN_ERR "inode is null");
+		return -1;
+	}
+	struct HUST_fs_super_block* H_sb = sb->s_fs_info;
+	struct HUST_inode* H_inode_array = NULL;
+	
+	int i;
+	struct buffer_head *bh;
+	bh = sb_bread(sb, 
+		H_sb->inode_table_block
+		+ inode_no*sizeof(struct HUST_inode)/HUST_BLOCKSIZE);
+    printk(KERN_INFO "H_sb->inode_table_block is %lld", H_sb->inode_table_block);
+	BUG_ON(!bh);
+	//TODO 
+	H_inode_array = (struct HUST_inode*)bh->b_data;
+	int idx = inode_no%(HUST_BLOCKSIZE/sizeof(struct HUST_inode));
+	ssize_t inode_array_size = HUST_BLOCKSIZE/sizeof(struct HUST_inode);
+	if (idx > inode_array_size) {
+		printk(KERN_ERR "in get_inode: out of index");
+		return -1;
+	}
+	memcpy(inode, H_inode_array+idx, sizeof(struct HUST_inode));
+	if(inode->inode_no != inode_no) {
+		printk(KERN_ERR "inode not init");
+	}
+	return 0;
+}
+
 static ssize_t
 HUST_fs_read(struct file *filp, char __user *buf, size_t len, loff_t *ppos)
 {
@@ -29,6 +101,7 @@ HUST_fs_read(struct file *filp, char __user *buf, size_t len, loff_t *ppos)
     c2u_len = min((loff_t)len, 4096 - into_block);
     c2u_len = min((loff_t)c2u_len, filp->f_inode->i_size - *ppos);
 
+    
     printk(KERN_INFO "read block %lu, offset in block %llu, returning %lu bytes\n",
            at_block, into_block, c2u_len);
     
@@ -49,11 +122,20 @@ HUST_fs_read(struct file *filp, char __user *buf, size_t len, loff_t *ppos)
     return c2u_len;
 }
 
+// static const struct address_space_operations HUST_fs_aops = {
+//     .readpage = HUST_fs_readpage,
+//     .writepage = HUST_fs_writepage,
+//     .write_begin = HUST_fs_write_begin,
+//     .write_end = HUST_fs_write_end,
+// };
+
 static const struct file_operations HUST_fs_file_ops = {
     .owner = THIS_MODULE,
     .llseek = generic_file_llseek,
     .mmap = generic_file_mmap,
-    .read = HUST_fs_read,
+    .fsync = generic_file_fsync,
+    .read_iter = generic_file_read_iter,
+    .write_iter = generic_file_write_iter,
 };
 
 static int
@@ -126,18 +208,51 @@ static const struct inode_operations HUST_fs_inode_ops = {
     .lookup = HUST_fs_lookup,
 };
 
-
 static int
 HUST_fs_fill_super(struct super_block *sb, void *data, int silent)
 {
+	int ret = -EPERM;
+    struct buffer_head *bh;
+    bh = sb_bread(sb, 1);
+	BUG_ON(!bh);
+    struct HUST_fs_super_block *sb_disk;
+    sb_disk = (struct HUST_fs_super_block *)bh->b_data;
+    
+    printk(KERN_INFO "HUST_fs: version num is %lu\n", sb_disk->version);
+    printk(KERN_INFO "HUST_fs: magic num is %lu\n", sb_disk->magic);
+    printk(KERN_INFO "HUST_fs: block_size num is %lu\n", sb_disk->block_size);
+    printk(KERN_INFO "HUST_fs: inodes_count num is %lu\n", sb_disk->inodes_count);
+    printk(KERN_INFO "HUST_fs: free_blocks num is %lu\n", sb_disk->free_blocks);
+    printk(KERN_INFO "HUST_fs: blocks_count num is %lu\n", sb_disk->blocks_count);
+
+    if(sb_disk->magic != MAGIC_NUM) {
+	    printk(KERN_ERR "Magic number not match!\n");
+	    goto release;
+    }
+
     struct inode *root_inode;
 
-    if (sb->s_blocksize != 4096)
+    if (sb_disk->block_size != 4096)
     {
-        printk(KERN_ERR "onefilerofs expects a blocksize of %d\n", 4096);
-        return -EFAULT;
+        printk(KERN_ERR "HUST_fs expects a blocksize of %d\n", 4096);
+        ret = -EFAULT;
+	goto release;
     }
-    printk(KERN_INFO "onefilerofs: blocksize is %lu, okay\n", sb->s_blocksize);
+
+    //fill vfs super block
+    sb->s_magic = sb_disk->magic;
+    sb->s_fs_info = sb_disk;
+    sb->s_maxbytes =  HUST_BLOCKSIZE*HUST_N_BLOCKS; /* Max file size */ 
+    //TODO sd->s_op = HUST_sops;
+
+    //-----------test get inode-----
+    struct HUST_inode root_node;
+    if(HUST_fs_get_inode(sb, HUST_ROOT_INODE_NUM, &root_node) != -1) {
+	    printk(KERN_INFO "Get inode sucessfully!\n");
+	    printk(KERN_INFO "root blocks is %llu and block[0] is %llu\n", 
+			    root_node.blocks, root_node.block[0]);
+    }
+    //-----------end test-----------
 
     root_inode = new_inode(sb);
     if (!root_inode)
@@ -150,8 +265,8 @@ HUST_fs_fill_super(struct super_block *sb, void *data, int silent)
                      S_IRUSR | S_IXUSR |
                      S_IRGRP | S_IXGRP |
                      S_IROTH | S_IXOTH);
-
-    root_inode->i_ino = 1;
+    root_inode->i_sb = sb;
+    root_inode->i_ino = HUST_ROOT_INODE_NUM;
     root_inode->i_atime = root_inode->i_mtime = root_inode->i_ctime =
                           current_time(root_inode);
 
@@ -171,6 +286,8 @@ HUST_fs_fill_super(struct super_block *sb, void *data, int silent)
     sb->s_root = d_make_root(root_inode);
     if (!sb->s_root)
         return -ENOMEM;
+release:
+    brelse(bh);
 
     return 0;
 }
