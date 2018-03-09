@@ -42,7 +42,7 @@ const struct file_operations HUST_fs_dir_ops = {
 
 const struct inode_operations HUST_fs_inode_ops = {
 	.lookup = HUST_fs_lookup,
-    .mkdir = HUST_fs_mkdir,
+	.mkdir = HUST_fs_mkdir,
 };
 
 /*
@@ -50,13 +50,39 @@ const struct super_operations oneblockfs_super_ops = {
     .evict_inode = HUST_evict_inode,
     .write_inode = HUST_write_inode,
 };
- const struct address_space_operations HUST_fs_aops = {
-    .readpage = HUST_fs_readpage,
-    .writepage = HUST_fs_writepage,
-    .write_begin = HUST_fs_write_begin,
-    .write_end = HUST_fs_write_end,
-};
 */
+const struct address_space_operations HUST_fs_aops = {
+	.readpage = HUST_fs_readpage,
+	// .writepage = HUST_fs_writepage,
+	//.write_begin = HUST_fs_write_begin,
+	//.write_end = HUST_fs_write_end,
+};
+
+int HUST_fs_get_block(struct inode *inode, sector_t block,
+		      struct buffer_head *bh, int create)
+{
+	struct super_block *sb = inode->i_sb;
+	uint64_t data_block;
+	printk(KERN_INFO "HUST: get block [%llu] of inode [%llu]\n", block,
+	       inode->i_ino);
+	if (block > 0) {
+		return -ENOSPC;
+	}
+	struct HUST_inode H_inode;
+	if (-1 == HUST_fs_get_inode(sb, inode->i_ino, &H_inode))
+		return -EFAULT;
+	if (H_inode.blocks == 0)
+		return -EFAULT;
+	map_bh(bh, sb, H_inode.block[0]);
+	return 0;
+}
+
+int HUST_fs_readpage(struct file *file, struct page *page)
+{
+	printk(KERN_INFO "HUST: readpage");
+	return block_read_full_page(page, HUST_fs_get_block);
+}
+
 static inline int HUST_find_first_zero_bit(const void *vaddr, unsigned size)
 {
 	const unsigned short *p = vaddr, *addr = vaddr;
@@ -74,63 +100,67 @@ static inline int HUST_find_first_zero_bit(const void *vaddr, unsigned size)
 	num = *--p;
 	return ((p - addr) << 4) + ffz(num);
 }
-int
-HUST_fs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
+
+int HUST_fs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 {
-    return HUST_fs_create_obj(dir, dentry, S_IFDIR|mode);
+	return HUST_fs_create_obj(dir, dentry, S_IFDIR | mode);
 }
+
 int HUST_fs_create_obj(struct inode *dir, struct dentry *dentry, umode_t mode)
 {
-    struct super_block *sb = dir->i_sb;
-    struct HUST_fs_super_block* disk_sb =  sb->s_fs_info;
-    const unsigned char *name = dentry->d_name.name;
-    printk(KERN_INFO "HUST_fs: Creating new object in directory with inode [%lu]\n",
-           dir->i_ino);
-    //read imap and bmap
-    uint64_t bmap_empty = disk_sb->blocks_count/8;
-    printk(KERN_INFO "bmap_empty is %llu\n", bmap_empty);
-    uint8_t *bmap = kmalloc(bmap_empty, GFP_KERNEL);
-    uint64_t i;
-    for (i = disk_sb->bmap_block; i < disk_sb->imap_block && bmap_empty != 0; ++i) {
-    	    struct buffer_head *bh;
-        bh = sb_bread(sb,i);
+	struct super_block *sb = dir->i_sb;
+	struct HUST_fs_super_block *disk_sb = sb->s_fs_info;
+	const unsigned char *name = dentry->d_name.name;
+	printk(KERN_INFO
+	       "HUST_fs: Creating new object in directory with inode [%lu]\n",
+	       dir->i_ino);
+	//read imap and bmap
+	uint64_t bmap_empty = disk_sb->blocks_count / 8;
+	printk(KERN_INFO "bmap_empty is %llu\n", bmap_empty);
+	uint8_t *bmap = kmalloc(bmap_empty, GFP_KERNEL);
+	uint64_t i;
+	for (i = disk_sb->bmap_block;
+	     i < disk_sb->imap_block && bmap_empty != 0; ++i) {
+		struct buffer_head *bh;
+		bh = sb_bread(sb, i);
 
-	if(!bh) {
-		printk(KERN_ERR "bh empty\n");
+		if (!bh) {
+			printk(KERN_ERR "bh empty\n");
+		}
+		uint8_t *bmap_t = (uint8_t *) bh->b_data;
+		printk(KERN_INFO "bmap is %x\n", bmap_t[0]);
+		if (bmap_empty >= HUST_BLOCKSIZE) {
+			memcpy(bmap, bmap_t, HUST_BLOCKSIZE);
+			bmap_empty -= HUST_BLOCKSIZE;
+		} else {
+			memcpy(bmap, bmap_t, bmap_empty);
+			bmap_empty = 0;
+		}
+		brelse(bh);
 	}
-	uint8_t *bmap_t = (uint8_t *)bh->b_data;
-	printk(KERN_INFO "bmap is %x\n", bmap_t[0]);
-	if(bmap_empty>=HUST_BLOCKSIZE){
-		memcpy(bmap,bmap_t,HUST_BLOCKSIZE);
-		bmap_empty -= HUST_BLOCKSIZE;
+	printk(KERN_INFO "HUST_find_first_zero_bit at %d\n",
+	       HUST_find_first_zero_bit(bmap, disk_sb->blocks_count / 8));
+	printk(KERN_INFO "data_block is %llu\n", disk_sb->data_block_number);
+	return 0;
+	int64_t imap_empty = disk_sb->blocks_count / 8;
+	uint8_t *imap = kmalloc(imap_empty, GFP_KERNEL);
+	for (i = disk_sb->imap_block;
+	     i < disk_sb->data_block_number && imap_empty != 0; ++i) {
+		struct buffer_head *bh;
+		bh = sb_bread(sb, i);
+		if (imap_empty >= HUST_BLOCKSIZE) {
+			memcpy(imap, bh->b_data, HUST_BLOCKSIZE);
+			imap_empty -= HUST_BLOCKSIZE;
+		} else {
+			memcpy(imap, bh->b_data, imap_empty);
+			imap_empty = 0;
+		}
+		brelse(bh);
 	}
-	else{
-		memcpy(bmap, bmap_t, bmap_empty);
-		bmap_empty = 0;
-	}
-       brelse(bh);
-    }
-    printk(KERN_INFO "HUST_find_first_zero_bit at %d\n", HUST_find_first_zero_bit(bmap, disk_sb->blocks_count/8));
-    printk(KERN_INFO "data_block is %llu\n", disk_sb->data_block_number);
-    return 0;
-    int64_t imap_empty = disk_sb->blocks_count/8;
-    uint8_t *imap = kmalloc(imap_empty, GFP_KERNEL);
-    for (i = disk_sb->imap_block; i < disk_sb->data_block_number && imap_empty != 0; ++i) {
-        struct buffer_head *bh;
-        bh = sb_bread(sb,i);
-	if(imap_empty >= HUST_BLOCKSIZE) {
-		memcpy(imap, bh->b_data, HUST_BLOCKSIZE);
-		imap_empty -= HUST_BLOCKSIZE;
-	}
-	else {
-		memcpy(imap, bh->b_data, imap_empty);
-		imap_empty = 0;
-	}
-        brelse(bh);
-    }
 
-    return 0;
+	return 0;
 }
+
 int HUST_fs_get_inode(struct super_block *sb,
 		      uint64_t inode_no, struct HUST_inode *inode)
 {
@@ -164,67 +194,70 @@ int HUST_fs_get_inode(struct super_block *sb,
 	return 0;
 }
 
-
 int HUST_fs_iterate(struct file *filp, struct dir_context *ctx)
 {
-    struct HUST_inode H_inode;
-    struct super_block *sb = filp->f_inode->i_sb;
+	struct HUST_inode H_inode;
+	struct super_block *sb = filp->f_inode->i_sb;
 
-    printk(KERN_INFO "HUST_fs: Iterate on inode [%llu]\n", filp->f_inode->i_ino);
+	printk(KERN_INFO "HUST_fs: Iterate on inode [%llu]\n",
+	       filp->f_inode->i_ino);
 
-    if (-1 == HUST_fs_get_inode(sb, filp->f_inode->i_ino, &H_inode))
-        return -EFAULT;
+	if (-1 == HUST_fs_get_inode(sb, filp->f_inode->i_ino, &H_inode))
+		return -EFAULT;
 
-	printk(KERN_INFO "H_inode.dir_children_count is %llu\n", H_inode.dir_children_count);
-	if(ctx->pos >= H_inode.dir_children_count) {
-		return 0;
-	}
-	
-	if(H_inode.blocks == 0) {
-		printk(KERN_INFO 
-		"HUST_fs: inode [%lu] has no data!\n", filp->f_inode->i_ino);
+	printk(KERN_INFO "H_inode.dir_children_count is %llu\n",
+	       H_inode.dir_children_count);
+	if (ctx->pos >= H_inode.dir_children_count) {
 		return 0;
 	}
 
-    uint64_t i, dir_unread;
+	if (H_inode.blocks == 0) {
+		printk(KERN_INFO
+		       "HUST_fs: inode [%lu] has no data!\n",
+		       filp->f_inode->i_ino);
+		return 0;
+	}
+
+	uint64_t i, dir_unread;
 	dir_unread = H_inode.dir_children_count;
 	printk(KERN_INFO "HUST_fs: dir_unread [%llu]\n", dir_unread);
 	if (dir_unread == 0) {
 		return 0;
 	}
 
-	struct HUST_dir_record* dir_arr = 
-		kmalloc(sizeof(struct HUST_dir_record)*dir_unread,GFP_KERNEL);
+	struct HUST_dir_record *dir_arr =
+	    kmalloc(sizeof(struct HUST_dir_record) * dir_unread, GFP_KERNEL);
 
 	struct buffer_head *bh;
-	for (i = 0; (i < H_inode.blocks)&&(dir_unread > 0); ++i) {
+	for (i = 0; (i < H_inode.blocks) && (dir_unread > 0); ++i) {
 		bh = sb_bread(sb, H_inode.block[i]);
-		uint64_t len = dir_unread*sizeof(struct HUST_dir_record);
+		uint64_t len = dir_unread * sizeof(struct HUST_dir_record);
 		uint64_t off = H_inode.dir_children_count - dir_unread;
-		if(len < HUST_BLOCKSIZE) { //read over
-			memcpy(dir_arr+(off*sizeof(struct HUST_dir_record)), bh->b_data, len);
+		if (len < HUST_BLOCKSIZE) {	//read over
+			memcpy(dir_arr + (off * sizeof(struct HUST_dir_record)),
+			       bh->b_data, len);
 			dir_unread = 0;
-		}
-		else {
-			memcpy(dir_arr+(off*sizeof(struct HUST_dir_record)), 
-				bh->b_data, HUST_BLOCKSIZE);
-			dir_unread -= HUST_BLOCKSIZE/sizeof(struct HUST_dir_record);
+		} else {
+			memcpy(dir_arr + (off * sizeof(struct HUST_dir_record)),
+			       bh->b_data, HUST_BLOCKSIZE);
+			dir_unread -=
+			    HUST_BLOCKSIZE / sizeof(struct HUST_dir_record);
 		}
 		brelse(bh);
 	}
 	for (i = 0; i < H_inode.dir_children_count; ++i) {
-		printk(KERN_INFO  " dir_arr[i].filename is %s\n",dir_arr[i].filename);
-		dir_emit(ctx, dir_arr[i].filename,
-			strlen(dir_arr[i].filename), dir_arr[i].inode_no, DT_REG);
-		ctx->pos ++;
+		printk(KERN_INFO " dir_arr[i].filename is %s\n",
+		       dir_arr[i].filename);
+		dir_emit(ctx, dir_arr[i].filename, strlen(dir_arr[i].filename),
+			 dir_arr[i].inode_no, DT_REG);
+		ctx->pos++;
 	}
-    kfree(dir_arr);
+	kfree(dir_arr);
 	printk(KERN_INFO "ctx->pos is %llu\n", ctx->pos);
-    return 0;
+	return 0;
 }
 
-
-void HUST_fs_convert_inode(struct HUST_inode* H_inode, struct inode* vfs_inode)
+void HUST_fs_convert_inode(struct HUST_inode *H_inode, struct inode *vfs_inode)
 {
 	vfs_inode->i_ino = H_inode->inode_no;
 	//vfs_inode->i_private = *H_inode;
@@ -233,76 +266,73 @@ void HUST_fs_convert_inode(struct HUST_inode* H_inode, struct inode* vfs_inode)
 struct dentry *HUST_fs_lookup(struct inode *parent_inode,
 			      struct dentry *child_dentry, unsigned int flags)
 {
-	struct super_block* sb = parent_inode->i_sb;
-    struct HUST_inode H_inode;
-    struct inode* inode = NULL;
-    uint64_t data_block = 0, i;
-    struct HUST_dir_record *dtptr;
-    struct buffer_head *bh;
+	struct super_block *sb = parent_inode->i_sb;
+	struct HUST_inode H_inode;
+	struct inode *inode = NULL;
+	uint64_t data_block = 0, i;
+	struct HUST_dir_record *dtptr;
+	struct buffer_head *bh;
 
-    printk(KERN_INFO "HUST_fs: lookup [%s] in inode [%lu]\n",
-           child_dentry->d_name.name, parent_inode->i_ino);
+	printk(KERN_ERR "HUST_fs: lookup [%s] in inode [%lu]\n",
+	       child_dentry->d_name.name, parent_inode->i_ino);
 
-    if (-1 == HUST_fs_get_inode(sb, parent_inode->i_ino, &H_inode))
-        return ERR_PTR(-EFAULT);
+	if (-1 == HUST_fs_get_inode(sb, parent_inode->i_ino, &H_inode))
+		return ERR_PTR(-EFAULT);
 
 	data_block = H_inode.block[0];
-    bh = sb_bread(sb, data_block);
-    if (!bh)
-    {
-        printk(KERN_ERR "1bfs lookup: Could not read data block [%llu]\n",
-               data_block);
-        return ERR_PTR(-EFAULT);
-    }
+	bh = sb_bread(sb, data_block);
+	if (!bh) {
+		printk(KERN_ERR
+		       "1bfs lookup: Could not read data block [%llu]\n",
+		       data_block);
+		return ERR_PTR(-EFAULT);
+	}
 
-    dtptr = (struct HUST_dir_record *)bh->b_data;
+	dtptr = (struct HUST_dir_record *)bh->b_data;
 
-    for (i = 0; i < H_inode.dir_children_count; i++)
-    {
-        if (strncmp(child_dentry->d_name.name, dtptr[i].filename, HUST_FILENAME_MAX_LEN) == 0)
-        {
+	for (i = 0; i < H_inode.dir_children_count; i++) {
+		if (strncmp
+		    (child_dentry->d_name.name, dtptr[i].filename,
+		     HUST_FILENAME_MAX_LEN) == 0) {
 
-            inode = iget_locked(sb, dtptr[i].inode_no);
-            if (!inode)
-            {
-                printk(KERN_ERR "HUST_fs lookup: iget_locked() returned NULL\n");
-                brelse(bh);
-                return ERR_PTR(-EFAULT);
-            }
+			inode = iget_locked(sb, dtptr[i].inode_no);
+			if (!inode) {
+				printk(KERN_ERR
+				       "HUST_fs lookup: iget_locked() returned NULL\n");
+				brelse(bh);
+				return ERR_PTR(-EFAULT);
+			}
 
-            if (inode->i_state & I_NEW)
-            {
-                inode_init_owner(inode, parent_inode, 0);
-				
-                HUST_fs_convert_inode(&H_inode, inode);
+			if (inode->i_state & I_NEW) {
+				inode_init_owner(inode, parent_inode, 0);
 
-                inode->i_op = &HUST_fs_inode_ops;
-				
-                if (S_ISDIR(H_inode.mode))
-                {
-                    inode->i_fop = &HUST_fs_dir_ops;
-                }
-                else if (S_ISREG(H_inode.mode))
-                {
-                    inode->i_fop = &HUST_fs_file_ops;;
-                    //inode->i_mapping->a_ops = &HUST;
-                }
+				HUST_fs_convert_inode(&H_inode, inode);
 
-                /* XXX Clarify meaning of this function. */
-                insert_inode_hash(inode);
+				inode->i_op = &HUST_fs_inode_ops;
 
-                unlock_new_inode(inode);
-            }
+				if (S_ISDIR(H_inode.mode)) {
+					inode->i_fop = &HUST_fs_dir_ops;
+				} else if (S_ISREG(H_inode.mode)) {
+					inode->i_fop = &HUST_fs_file_ops;;
+					//inode->i_mapping->a_ops = &HUST;
+				}
 
-            d_add(child_dentry, inode);
-            brelse(bh);
-            return NULL;
-        }
-    }
+				/* XXX Clarify meaning of this function. */
+				insert_inode_hash(inode);
 
-    d_add(child_dentry, NULL);
-    brelse(bh);
-    return NULL;
+				unlock_new_inode(inode);
+			}
+
+			d_add(child_dentry, inode);
+			brelse(bh);
+			return NULL;
+		}
+	}
+
+	d_add(child_dentry, NULL);
+	brelse(bh);
+	printk(KERN_ERR "lookup over\n");
+	return NULL;
 }
 
 int HUST_fs_fill_super(struct super_block *sb, void *data, int silent)
