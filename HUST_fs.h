@@ -50,7 +50,9 @@ struct HUST_dir_record {
 int HUST_fs_get_inode(struct super_block *sb,
 		uint64_t inode_no, struct HUST_inode* inode);
 
-ssize_t HUST_fs_read(struct file *filp, char __user *buf, size_t len, loff_t *ppos);
+int HUST_fs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode);
+
+int HUST_fs_create_obj(struct inode *dir, struct dentry *dentry, umode_t mode);
 
 int HUST_fs_iterate(struct file *filp, struct dir_context *ctx);
 
