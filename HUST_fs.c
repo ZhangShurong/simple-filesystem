@@ -25,6 +25,11 @@ struct file_system_type HUST_fs_type = {
 	.mount = HUST_fs_mount,
 	.kill_sb = HUST_fs_kill_superblock,	/* unmount */
 };
+//for test
+ssize_t HUST_file_read_iter(struct file* filp, char* buf, size_t len, loff_t* ppos){
+	printk(KERN_ERR "filp->f_inode is %llu\n", filp->f_inode->i_ino);
+	return 0;
+}
 
 const struct file_operations HUST_fs_file_ops = {
 	.owner = THIS_MODULE,
@@ -32,6 +37,8 @@ const struct file_operations HUST_fs_file_ops = {
 	.mmap = generic_file_mmap,
 	.fsync = generic_file_fsync,
 	.read_iter = generic_file_read_iter,
+//	.read = HUST_file_read_iter,
+
 	.write_iter = generic_file_write_iter,
 };
 
@@ -51,11 +58,21 @@ const struct super_operations oneblockfs_super_ops = {
     .write_inode = HUST_write_inode,
 };
 */
+int HUST_fs_writepage(struct page* page, struct writeback_control* wbc) {
+	printk(KERN_ERR "HUST: in write page\n");
+	return 0;
+}
+int HUST_fs_write_begin(struct file* file, struct address_space* mapping, 
+		loff_t pos, unsigned len, unsigned flags, 
+		struct page** pagep, void** fsdata) {
+	printk("HUST: in write_begin\n");
+	return 0;
+}
 const struct address_space_operations HUST_fs_aops = {
 	.readpage = HUST_fs_readpage,
-	// .writepage = HUST_fs_writepage,
-	//.write_begin = HUST_fs_write_begin,
-	//.write_end = HUST_fs_write_end,
+	 .writepage = HUST_fs_writepage,
+	.write_begin = HUST_fs_write_begin,
+	.write_end = generic_write_end,
 };
 
 int HUST_fs_get_block(struct inode *inode, sector_t block,
@@ -63,7 +80,7 @@ int HUST_fs_get_block(struct inode *inode, sector_t block,
 {
 	struct super_block *sb = inode->i_sb;
 	uint64_t data_block;
-	printk(KERN_INFO "HUST: get block [%llu] of inode [%llu]\n", block,
+	printk(KERN_ERR "HUST: get block [%llu] of inode [%llu]\n", block,
 	       inode->i_ino);
 	if (block > 0) {
 		return -ENOSPC;
@@ -329,7 +346,7 @@ struct dentry *HUST_fs_lookup(struct inode *parent_inode,
 
 					printk(KERN_ERR "in case b");
 					inode->i_fop = &HUST_fs_file_ops;;
-					//inode->i_mapping->a_ops = &HUST;
+					inode->i_mapping->a_ops = &HUST_fs_aops;
 				}
 
 					printk(KERN_ERR "in case c");
