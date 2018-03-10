@@ -46,7 +46,7 @@ struct HUST_dir_record {
 	uint64_t inode_no;
 };
 
-
+int HUST_fs_readpage(struct file *file, struct page *page);
 int HUST_fs_get_inode(struct super_block *sb,
 		uint64_t inode_no, struct HUST_inode* inode);
 
