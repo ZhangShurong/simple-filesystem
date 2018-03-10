@@ -171,7 +171,7 @@ static int write_bmap(int fd)
 static int write_imap(int fd)
 {
 	memset(imap, 0, imap_size*HUST_BLOCKSIZE);
-	imap[0] |= 0x1;
+	imap[0] |= 0x3;
 
 	ssize_t res = write(fd, imap, imap_size*HUST_BLOCKSIZE);
 	if (res != imap_size*HUST_BLOCKSIZE) {
@@ -189,10 +189,22 @@ static int write_itable(int fd)
 	root_dir_inode.inode_no = HUST_ROOT_INODE_NUM;
 	root_dir_inode.blocks = 1;
 	root_dir_inode.block[0] = super_block.data_block_number;
-	root_dir_inode.dir_children_count = 1;
+	root_dir_inode.dir_children_count = 3;
 
 	ret = write(fd, &root_dir_inode, sizeof(root_dir_inode));
 	if (ret != sizeof(root_dir_inode)) {
+		perror("write_itable error!\n");
+		return -1;
+	}
+	struct HUST_inode onefile_inode;
+	onefile_inode.mode = S_IFREG;
+	onefile_inode.inode_no = 1;
+	onefile_inode.blocks = 0;
+	onefile_inode.block[0] = 0;
+	onefile_inode.file_size = 0;
+
+	ret = write(fd, &onefile_inode, sizeof(onefile_inode));
+	if (ret != sizeof(onefile_inode)) {
 		perror("write_itable error!\n");
 		return -1;
 	}
@@ -201,11 +213,17 @@ static int write_itable(int fd)
 	const char* cur_dir = ".";
 	const char* parent_dir = "..";
 	
+	
 	memcpy(root_dir_c.filename, cur_dir, strlen(cur_dir) + 1);
 	root_dir_c.inode_no = HUST_ROOT_INODE_NUM;
 	struct HUST_dir_record root_dir_p;
 	memcpy(root_dir_p.filename, parent_dir, strlen(parent_dir) + 1);
 	root_dir_p.inode_no = HUST_ROOT_INODE_NUM;
+
+	struct HUST_dir_record file_record;
+	const char* onefile = "file";
+	memcpy(file_record.filename, onefile, strlen(onefile) + 1);
+	file_record.inode_no = 1;
 
 	off_t current_off = lseek(fd, 0L, SEEK_CUR);
 	printf("Current seek is %lu and rootdir at %lu\n", current_off
@@ -217,6 +235,7 @@ static int write_itable(int fd)
 	}
 	ret = write(fd, &root_dir_c, sizeof(root_dir_c));
 	ret = write(fd, &root_dir_p, sizeof(root_dir_p));
+	ret = write(fd, &file_record, sizeof(file_record));
 	if (ret != sizeof(root_dir_c)) {
 		perror("Write error!\n");
 		return -1;
