@@ -79,7 +79,7 @@ int HUST_fs_get_block(struct inode *inode, sector_t block,
 
 int HUST_fs_readpage(struct file *file, struct page *page)
 {
-	printk(KERN_INFO "HUST: readpage");
+	printk(KERN_ERR "HUST: readpage");
 	return block_read_full_page(page, HUST_fs_get_block);
 }
 
@@ -260,6 +260,8 @@ int HUST_fs_iterate(struct file *filp, struct dir_context *ctx)
 void HUST_fs_convert_inode(struct HUST_inode *H_inode, struct inode *vfs_inode)
 {
 	vfs_inode->i_ino = H_inode->inode_no;
+	vfs_inode->i_mode = H_inode->mode;
+	vfs_inode->i_size = H_inode->file_size;
 	//vfs_inode->i_private = *H_inode;
 }
 
@@ -276,8 +278,10 @@ struct dentry *HUST_fs_lookup(struct inode *parent_inode,
 	printk(KERN_ERR "HUST_fs: lookup [%s] in inode [%lu]\n",
 	       child_dentry->d_name.name, parent_inode->i_ino);
 
-	if (-1 == HUST_fs_get_inode(sb, parent_inode->i_ino, &H_inode))
+	if (-1 == HUST_fs_get_inode(sb, parent_inode->i_ino, &H_inode)){
+		printk(KERN_ERR "HUST: cannot get inode\n");
 		return ERR_PTR(-EFAULT);
+	}
 
 	data_block = H_inode.block[0];
 	bh = sb_bread(sb, data_block);
@@ -291,10 +295,12 @@ struct dentry *HUST_fs_lookup(struct inode *parent_inode,
 	dtptr = (struct HUST_dir_record *)bh->b_data;
 
 	for (i = 0; i < H_inode.dir_children_count; i++) {
+		printk(KERN_ERR "child_dentry is %s and file name is %s\n", child_dentry->d_name.name, dtptr[i].filename);
 		if (strncmp
 		    (child_dentry->d_name.name, dtptr[i].filename,
 		     HUST_FILENAME_MAX_LEN) == 0) {
 
+					printk(KERN_ERR "in case 1");
 			inode = iget_locked(sb, dtptr[i].inode_no);
 			if (!inode) {
 				printk(KERN_ERR
@@ -306,25 +312,37 @@ struct dentry *HUST_fs_lookup(struct inode *parent_inode,
 			if (inode->i_state & I_NEW) {
 				inode_init_owner(inode, parent_inode, 0);
 
-				HUST_fs_convert_inode(&H_inode, inode);
+				struct HUST_inode H_child_inode;
+				if (-1 == HUST_fs_get_inode(sb, dtptr[i].inode_no, &H_child_inode))
+				{
+					return ERR_PTR(-EFAULT);
+				}
+
+				HUST_fs_convert_inode(&H_child_inode, inode);
 
 				inode->i_op = &HUST_fs_inode_ops;
 
-				if (S_ISDIR(H_inode.mode)) {
+				if (S_ISDIR(H_child_inode.mode)) {
+					printk(KERN_ERR "in case a");
 					inode->i_fop = &HUST_fs_dir_ops;
-				} else if (S_ISREG(H_inode.mode)) {
+				} else if (S_ISREG(H_child_inode.mode)) {
+
+					printk(KERN_ERR "in case b");
 					inode->i_fop = &HUST_fs_file_ops;;
 					//inode->i_mapping->a_ops = &HUST;
 				}
 
+					printk(KERN_ERR "in case c");
 				/* XXX Clarify meaning of this function. */
 				insert_inode_hash(inode);
-
+				printk(KERN_ERR "inode->i_sb is %llu and sb is %llu\n", (uint64_t) inode->i_sb, (uint64_t)sb);
 				unlock_new_inode(inode);
 			}
 
 			d_add(child_dentry, inode);
 			brelse(bh);
+
+	printk(KERN_ERR "lookup over at a\n");
 			return NULL;
 		}
 	}
