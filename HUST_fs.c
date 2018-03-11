@@ -2,16 +2,6 @@
  * Based on psankar's simplefs:
  * https://github.com/psankar/simplefs */
 
-#include <linux/init.h>
-#include <linux/module.h>
-#include <linux/fs.h>
-#include <linux/init.h>
-#include <linux/module.h>
-#include <linux/fs.h>
-#include <linux/string.h>
-#include <linux/uaccess.h>
-#include <linux/buffer_head.h>
-
 #include "constants.h"
 #include "HUST_fs.h"
 
@@ -25,6 +15,11 @@ struct file_system_type HUST_fs_type = {
 	.mount = HUST_fs_mount,
 	.kill_sb = HUST_fs_kill_superblock,	/* unmount */
 };
+//for test
+ssize_t HUST_file_read_iter(struct file* filp, char* buf, size_t len, loff_t* ppos){
+	printk(KERN_ERR "filp->f_inode is %llu\n", filp->f_inode->i_ino);
+	return 0;
+}
 
 const struct file_operations HUST_fs_file_ops = {
 	.owner = THIS_MODULE,
@@ -32,6 +27,8 @@ const struct file_operations HUST_fs_file_ops = {
 	.mmap = generic_file_mmap,
 	.fsync = generic_file_fsync,
 	.read_iter = generic_file_read_iter,
+//	.read = HUST_file_read_iter,
+
 	.write_iter = generic_file_write_iter,
 };
 
@@ -51,11 +48,26 @@ const struct super_operations oneblockfs_super_ops = {
     .write_inode = HUST_write_inode,
 };
 */
+int HUST_fs_writepage(struct page* page, struct writeback_control* wbc) {
+	printk(KERN_ERR "HUST: in write page\n");
+       return block_write_full_page(page, HUST_fs_get_block, wbc);
+}
+int HUST_fs_write_begin(struct file* file, struct address_space* mapping, 
+		loff_t pos, unsigned len, unsigned flags, 
+		struct page** pagep, void** fsdata) {
+	printk("HUST: in write_begin\n");
+	int ret;
+    ret = block_write_begin(mapping, pos, len, flags, pagep, HUST_fs_get_block);
+    if (unlikely(ret))
+        printk(KERN_ERR "HUST: Write failed for pos [%llu], len [%u]\n", pos, len);
+
+    return ret;
+}
 const struct address_space_operations HUST_fs_aops = {
 	.readpage = HUST_fs_readpage,
-	// .writepage = HUST_fs_writepage,
-	//.write_begin = HUST_fs_write_begin,
-	//.write_end = HUST_fs_write_end,
+	 .writepage = HUST_fs_writepage,
+	.write_begin = HUST_fs_write_begin,
+	.write_end = generic_write_end,
 };
 
 int HUST_fs_get_block(struct inode *inode, sector_t block,
@@ -63,7 +75,7 @@ int HUST_fs_get_block(struct inode *inode, sector_t block,
 {
 	struct super_block *sb = inode->i_sb;
 	uint64_t data_block;
-	printk(KERN_INFO "HUST: get block [%llu] of inode [%llu]\n", block,
+	printk(KERN_ERR "HUST: get block [%llu] of inode [%llu]\n", block,
 	       inode->i_ino);
 	if (block > 0) {
 		return -ENOSPC;
@@ -83,23 +95,6 @@ int HUST_fs_readpage(struct file *file, struct page *page)
 	return block_read_full_page(page, HUST_fs_get_block);
 }
 
-static inline int HUST_find_first_zero_bit(const void *vaddr, unsigned size)
-{
-	const unsigned short *p = vaddr, *addr = vaddr;
-	unsigned short num;
-
-	if (!size)
-		return 0;
-
-	size >>= 4;
-	while (*p++ == 0xffff) {
-		if (--size == 0)
-			return (p - addr) << 4;
-	}
-
-	num = *--p;
-	return ((p - addr) << 4) + ffz(num);
-}
 
 int HUST_fs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 {
@@ -108,57 +103,9 @@ int HUST_fs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 
 int HUST_fs_create_obj(struct inode *dir, struct dentry *dentry, umode_t mode)
 {
-	struct super_block *sb = dir->i_sb;
-	struct HUST_fs_super_block *disk_sb = sb->s_fs_info;
-	const unsigned char *name = dentry->d_name.name;
-	printk(KERN_INFO
-	       "HUST_fs: Creating new object in directory with inode [%lu]\n",
-	       dir->i_ino);
-	//read imap and bmap
-	uint64_t bmap_empty = disk_sb->blocks_count / 8;
-	printk(KERN_INFO "bmap_empty is %llu\n", bmap_empty);
-	uint8_t *bmap = kmalloc(bmap_empty, GFP_KERNEL);
-	uint64_t i;
-	for (i = disk_sb->bmap_block;
-	     i < disk_sb->imap_block && bmap_empty != 0; ++i) {
-		struct buffer_head *bh;
-		bh = sb_bread(sb, i);
-
-		if (!bh) {
-			printk(KERN_ERR "bh empty\n");
-		}
-		uint8_t *bmap_t = (uint8_t *) bh->b_data;
-		printk(KERN_INFO "bmap is %x\n", bmap_t[0]);
-		if (bmap_empty >= HUST_BLOCKSIZE) {
-			memcpy(bmap, bmap_t, HUST_BLOCKSIZE);
-			bmap_empty -= HUST_BLOCKSIZE;
-		} else {
-			memcpy(bmap, bmap_t, bmap_empty);
-			bmap_empty = 0;
-		}
-		brelse(bh);
-	}
-	printk(KERN_INFO "HUST_find_first_zero_bit at %d\n",
-	       HUST_find_first_zero_bit(bmap, disk_sb->blocks_count / 8));
-	printk(KERN_INFO "data_block is %llu\n", disk_sb->data_block_number);
-	return 0;
-	int64_t imap_empty = disk_sb->blocks_count / 8;
-	uint8_t *imap = kmalloc(imap_empty, GFP_KERNEL);
-	for (i = disk_sb->imap_block;
-	     i < disk_sb->data_block_number && imap_empty != 0; ++i) {
-		struct buffer_head *bh;
-		bh = sb_bread(sb, i);
-		if (imap_empty >= HUST_BLOCKSIZE) {
-			memcpy(imap, bh->b_data, HUST_BLOCKSIZE);
-			imap_empty -= HUST_BLOCKSIZE;
-		} else {
-			memcpy(imap, bh->b_data, imap_empty);
-			imap_empty = 0;
-		}
-		brelse(bh);
-	}
-
-	return 0;
+	printk(KERN_ERR "IN create obj\n");
+    save_imap(dir->i_sb, 2, 1);
+    save_imap(dir->i_sb, 3, 0);
 }
 
 int HUST_fs_get_inode(struct super_block *sb,
@@ -329,7 +276,7 @@ struct dentry *HUST_fs_lookup(struct inode *parent_inode,
 
 					printk(KERN_ERR "in case b");
 					inode->i_fop = &HUST_fs_file_ops;;
-					//inode->i_mapping->a_ops = &HUST;
+					inode->i_mapping->a_ops = &HUST_fs_aops;
 				}
 
 					printk(KERN_ERR "in case c");
