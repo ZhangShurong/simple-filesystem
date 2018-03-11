@@ -546,13 +546,17 @@ int save_imap(struct super_block* sb, uint64_t inode_num, uint8_t value)
      * 1. find one block we want to change;
      * 2. write the block
      */
-	printk(KERN_ERR "IN save imap\n");
+	
     struct HUST_fs_super_block *disk_sb = sb->s_fs_info;
     uint64_t block_idx = inode_num / (HUST_BLOCKSIZE*8) + disk_sb->bmap_block;
     uint64_t bit_off = inode_num % (HUST_BLOCKSIZE*8);
     
     struct buffer_head* bh;
     bh = sb_bread(sb, block_idx);
+    
+    printk(KERN_ERR "In save imap\n");
+    int res = checkbit(bh->b_data[bit_off/8], bit_off%8);
+    
     BUG_ON(!bh);
     if(value == 1){
         setbit(bh->b_data[bit_off/8], bit_off%8);
@@ -565,11 +569,6 @@ int save_imap(struct super_block* sb, uint64_t inode_num, uint8_t value)
     }
     map_bh(bh, sb, block_idx);
     brelse(bh);
-    //----- test
-    bh = sb_bread(sb, block_idx);
-    printk(KERN_ERR, "Check bit is %d\n", checkbit(bh->b_data[bit_off/8], bit_off%8));
-    brelse(bh);
-    //-----
     return 0;
 }
 int save_bmap(struct super_block* sb, uint64_t block_num, uint8_t value)
