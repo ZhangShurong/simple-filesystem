@@ -1,7 +1,10 @@
 #include "HUST_fs.h"
 #include "constants.h"
 
-
+int checkbit(uint8_t number, int x)
+{
+    return (number >> x) & 1U;
+}
 int HUST_find_first_zero_bit(const void *vaddr, unsigned size)
 {
 	const unsigned short *p = vaddr, *addr = vaddr;
@@ -115,7 +118,7 @@ int save_imap(struct super_block* sb, uint64_t inode_num, uint8_t value)
     brelse(bh);
     //----- test
     bh = sb_bread(sb, block_idx);
-    printk(KERN_ERR, "Check bit is %d\n", (bh->b_data[bit_off/8], bit_off%8));
+    printk(KERN_ERR, "Check bit is %d\n", checkbit(bh->b_data[bit_off/8], bit_off%8));
     brelse(bh);
     //-----
     return 0;
@@ -124,5 +127,8 @@ int save_bmap(struct super_block* sb, uint64_t block_num, uint8_t value)
 {
     return 0;
 }
-int save_super(struct super_block* sb);
+int save_super(struct super_block* sb)
+{
+	return 0;
+}
 

@@ -1,3 +1,4 @@
+
 #ifndef HUST_FS_H
 #define HUST_FS_H
 /*
@@ -18,10 +19,7 @@
 #define setbit(number,x) number |= 1UL << x
 #define clearbit(number, x) number &= ~(1UL << x)
 
-int checkbit(uint8_t number, int x) 
-{
-    return (number >> x) & 1U;
-}
+int checkbit(uint8_t number, int x);
 
 struct HUST_fs_super_block {
 	uint64_t version;
