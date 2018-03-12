@@ -40,6 +40,7 @@ const struct file_operations HUST_fs_dir_ops = {
 const struct inode_operations HUST_fs_inode_ops = {
 	.lookup = HUST_fs_lookup,
 	.mkdir = HUST_fs_mkdir,
+    .create = HUST_fs_create,
 };
 
 /*
@@ -95,7 +96,10 @@ int HUST_fs_readpage(struct file *file, struct page *page)
 	return block_read_full_page(page, HUST_fs_get_block);
 }
 
-
+int HUST_fs_create(struct inode *dir, struct dentry *dentry, umode_t mode,bool excl)
+{
+    return HUST_fs_create_obj(dir, dentry, mode);
+}
 int HUST_fs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 {
 	return HUST_fs_create_obj(dir, dentry, S_IFDIR | mode);
@@ -108,17 +112,24 @@ int HUST_fs_create_obj(struct inode *dir, struct dentry *dentry, umode_t mode)
 	printk(KERN_ERR "In create obj and dir is %llu\n", (uint64_t)dir);
     const unsigned char *name = dentry->d_name.name;
     
+    struct HUST_inode H_dir_inode;
+    HUST_fs_get_inode(sb, dir->i_ino, &H_dir_inode);
+        
+    if(H_dir_inode.dir_children_count >= HUST_BLOCKSIZE/sizeof(struct HUST_dir_record)) {
+        return -ENOSPC;
+    }
+    
     //1. write inode
-    uint64_t new_inode_no = HUST_fs_get_empty_inode(dir->i_sb);
-    BUG_ON(!new_inode_no);
+    uint64_t first_empty_inode_num = HUST_fs_get_empty_inode(dir->i_sb);
+    BUG_ON(!first_empty_inode_num);
     struct inode* inode;
     struct HUST_inode obj_inode;
     inode = new_inode(sb);
     if(!inode) {
         return -ENOSPC;
     }
-    inode->i_ino = new_inode_no;
-    obj_inode.inode_no = new_inode_no;
+    inode->i_ino = first_empty_inode_num;
+    obj_inode.inode_no = first_empty_inode_num;
     inode_init_owner(inode, dir, mode);
     inode->i_op = &HUST_fs_inode_ops;
     obj_inode.mode = mode;
@@ -140,7 +151,7 @@ int HUST_fs_create_obj(struct inode *dir, struct dentry *dentry, umode_t mode)
         const char* cur_dir = ".";
         const char* parent_dir = "..";
         memcpy(dir_arr[0].filename, cur_dir, strlen(cur_dir) + 1);
-        dir_arr[0].inode_no = new_inode_no;
+        dir_arr[0].inode_no = first_empty_inode_num;
         memcpy(dir_arr[1].filename, parent_dir, strlen(parent_dir) + 1);
         dir_arr[2].inode_no = dir->i_ino;    
         save_inode(sb, obj_inode);
@@ -148,40 +159,38 @@ int HUST_fs_create_obj(struct inode *dir, struct dentry *dentry, umode_t mode)
         save_bmap(sb, first_empty_block_num, 1);
         
         //update dir
-        
-        struct HUST_inode H_dir_inode;
-        HUST_fs_get_inode(sb, dir->i_ino, &H_dir_inode);
-        
-        if(H_dir_inode.dir_children_count >= HUST_BLOCKSIZE/sizeof(struct HUST_dir_record))
-        {
-            return -ENOSPC;
-        }
-        
-        struct HUST_dir_record new_dir;
-        memcpy(new_dir.filename, name, strlen(name)+1);
-        new_dir.inode_no = new_inode_no;
-        struct buffer_head* bh;
-        bh = sb_bread(sb, H_dir_inode.block[0]);
-        memcpy(bh->b_data + H_dir_inode.dir_children_count*sizeof(struct HUST_dir_record), &new_dir, sizeof(new_dir));
-        map_bh(bh, sb, H_dir_inode.block[0]);
-        brelse(bh);
-        
-        //updata dir inode
-        H_dir_inode.dir_children_count += 1;
-        save_inode(sb, H_dir_inode);
+    
+        disk_sb->free_blocks-=1;
     }
     else if(S_ISREG(mode)) {
         inode->i_size = 0;
-        inode->i_blocks = 0;        
+        inode->i_blocks = 0;
+        inode->i_fop = &HUST_fs_file_ops;
         obj_inode.blocks = 0;
         obj_inode.file_size = 0;
-    }
         
-    
+        //write inode
+        save_inode(sb, obj_inode);
+    }
+    struct HUST_dir_record new_dir;
+    memcpy(new_dir.filename, name, strlen(name)+1);
+    new_dir.inode_no = first_empty_inode_num;
+    struct buffer_head* bh;
+    bh = sb_bread(sb, H_dir_inode.block[0]);
+    memcpy(bh->b_data + H_dir_inode.dir_children_count*sizeof(struct HUST_dir_record), &new_dir, sizeof(new_dir));
+    map_bh(bh, sb, H_dir_inode.block[0]);
+    brelse(bh);
+        
+    //updata dir inode
+    H_dir_inode.dir_children_count += 1;
+    save_inode(sb, H_dir_inode);
+        
+    save_imap(sb, first_empty_inode_num, 1);
     insert_inode_hash(inode);
     mark_inode_dirty(inode);
     mark_inode_dirty(dir);
     d_instantiate(dentry, inode);
+    printk(KERN_ERR "first_empty_inode_num is %llu\n", first_empty_inode_num);
     return 0;
 }
 
@@ -625,7 +634,7 @@ int save_imap(struct super_block* sb, uint64_t inode_num, uint8_t value)
      */
 	
     struct HUST_fs_super_block *disk_sb = sb->s_fs_info;
-    uint64_t block_idx = inode_num / (HUST_BLOCKSIZE*8) + disk_sb->bmap_block;
+    uint64_t block_idx = inode_num / (HUST_BLOCKSIZE*8) + disk_sb->imap_block;
     uint64_t bit_off = inode_num % (HUST_BLOCKSIZE*8);
     
     struct buffer_head* bh;

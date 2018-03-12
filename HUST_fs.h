@@ -70,6 +70,7 @@ int HUST_fs_get_inode(struct super_block *sb,
 		uint64_t inode_no, struct HUST_inode* inode);
 
 int HUST_fs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode);
+int HUST_fs_create(struct inode *dir, struct dentry *dentry, umode_t mode,bool excl);
 
 int HUST_fs_create_obj(struct inode *dir, struct dentry *dentry, umode_t mode);
 
