@@ -136,6 +136,7 @@ int HUST_fs_create_obj(struct inode *dir, struct dentry *dentry, umode_t mode)
         }        
         struct HUST_dir_record dir_arr[2];
         uint64_t first_empty_block_num = HUST_fs_get_empty_block(sb);
+        obj_inode.block[0] = first_empty_block_num;
         const char* cur_dir = ".";
         const char* parent_dir = "..";
         memcpy(dir_arr[0].filename, cur_dir, strlen(cur_dir) + 1);
@@ -143,8 +144,8 @@ int HUST_fs_create_obj(struct inode *dir, struct dentry *dentry, umode_t mode)
         memcpy(dir_arr[1].filename, parent_dir, strlen(parent_dir) + 1);
         dir_arr[2].inode_no = dir->i_ino;    
         save_inode(sb, obj_inode);
-        save_block(sb, first_empty_block_num, dir_arr, sizeof(dir_arr));
-        save_bmap(sb, first_memory_node, 1);
+        save_block(sb, first_empty_block_num, dir_arr, sizeof(struct HUST_dir_record)*2);
+        save_bmap(sb, first_empty_block_num, 1);
         
         //update dir
         
