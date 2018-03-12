@@ -56,6 +56,8 @@ struct HUST_dir_record {
 int HUST_find_first_zero_bit(const void *vaddr, unsigned size);
 uint64_t HUST_fs_get_empty_block(struct super_block* sb, uint64_t inode_no);
 uint64_t HUST_fs_get_empty_inode(struct super_block* sb);
+int save_inode(struct super_block* sb, struct HUST_inode H_inode);
+int save_block(struct super_block* sb, uint64_t block_num, void* buf, ssize_t size);
 int save_imap(struct super_block* sb, uint64_t inode_num, uint8_t value);
 int save_bmap(struct super_block* sb, uint64_t block_num, uint8_t value);
 int save_super(struct super_block* sb);

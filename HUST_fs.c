@@ -103,7 +103,11 @@ int HUST_fs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 
 int HUST_fs_create_obj(struct inode *dir, struct dentry *dentry, umode_t mode)
 {
-	printk(KERN_ERR "IN create obj and dir is %llu\n", (uint64_t)dir);
+	printk(KERN_ERR "In create obj and dir is %llu\n", (uint64_t)dir);
+    uint64_t new_inode_no = HUST_fs_get_empty_inode(dir->i_sb);
+    BUG_ON(!new_inode_no);
+    struct HUST_inode obj_inode;
+    
     save_imap(dir->i_sb, 2, 1);
     save_imap(dir->i_sb, 3, 0);
 }
@@ -555,7 +559,6 @@ int save_imap(struct super_block* sb, uint64_t inode_num, uint8_t value)
     bh = sb_bread(sb, block_idx);
     
     printk(KERN_ERR "In save imap\n");
-    int res = checkbit(bh->b_data[bit_off/8], bit_off%8);
     
     BUG_ON(!bh);
     if(value == 1){
@@ -571,12 +574,81 @@ int save_imap(struct super_block* sb, uint64_t inode_num, uint8_t value)
     brelse(bh);
     return 0;
 }
+
+int save_inode(struct super_block* sb, struct HUST_inode H_inode)
+{
+    uint64_t inode_num = H_inode.inode_no;
+    struct HUST_fs_super_block *disk_sb = sb->s_fs_info;
+    uint64_t block_idx = inode_num*sizeof(struct HUST_inode) / HUST_BLOCKSIZE 
+        + disk_sb->inode_table_block ;
+    uint64_t arr_off = inode_num % (HUST_BLOCKSIZE / sizeof(struct HUST_inode));
+    
+    //1. read disk inode
+    struct buffer_head* bh;
+    bh = sb_bread(sb, block_idx);
+    printk(KERN_ERR "In save inode and inode_no is %llu\n", inode_num);
+    BUG_ON(!bh);
+    
+    //2. change disk inode, TODO:verify inode
+    struct HUST_inode* p_disk_inode;
+    p_disk_inode = (struct HUST_inode*)bh->b_data;
+    memcpy(p_disk_inode + arr_off, &H_inode, sizeof(H_inode));
+    
+    //3. save disk inode
+    map_bh(bh, sb, block_idx);
+    brelse(bh);
+    return 0;
+}
+int save_block(struct super_block* sb, uint64_t block_num, void* buf, ssize_t size)
+{
+    /*
+     * 1. read disk block
+     * 2. change block
+     * 2.1 TODO verify block
+     * 3. save block
+     */
+    struct HUST_fs_super_block *disk_sb;
+    disk_sb = sb->s_fs_info;
+    struct buffer_head* bh;
+    bh = sb_bread(sb, block_num+disk_sb->data_block_number);
+    BUG_ON(!bh);
+    memcpy(bh->b_data, buf, size);
+    brelse(bh);
+    return 0;
+}
 int save_bmap(struct super_block* sb, uint64_t block_num, uint8_t value)
 {
+        /*
+     * 1. find one block we want to change;
+     * 2. write the block
+     */
+    struct HUST_fs_super_block *disk_sb = sb->s_fs_info;
+    uint64_t block_idx = block_num / (HUST_BLOCKSIZE*8) + disk_sb->imap_block;
+    uint64_t bit_off = block_num % (HUST_BLOCKSIZE*8);
+    
+    struct buffer_head* bh;
+    bh = sb_bread(sb, block_idx);
+    
+    printk(KERN_ERR "In save bmap\n");
+    
+    BUG_ON(!bh);
+    if(value == 1){
+        setbit(bh->b_data[bit_off/8], bit_off%8);
+    }
+    else if(value == 0){
+        clearbit(bh->b_data[bit_off/8], bit_off%8);
+    }
+    else{
+        printk(KERN_ERR "value error\n");
+    }
+    map_bh(bh, sb, block_idx);
+    brelse(bh);
     return 0;
 }
 int save_super(struct super_block* sb)
 {
+    struct HUST_fs_super_block *disk_sb = sb->s_fs_info;
+    
 	return 0;
 }
 
