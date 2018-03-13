@@ -54,17 +54,20 @@ struct HUST_dir_record {
 
 //Utils
 int HUST_find_first_zero_bit(const void *vaddr, unsigned size);
+int get_bmap(struct super_block* sb, uint8_t* bmap, ssize_t bmap_size);
+int get_imap(struct super_block* sb, uint8_t* imap, ssize_t imap_size);
 uint64_t HUST_fs_get_empty_block(struct super_block* sb);
 uint64_t HUST_fs_get_empty_inode(struct super_block* sb);
 int save_inode(struct super_block* sb, struct HUST_inode H_inode);
 int save_block(struct super_block* sb, uint64_t block_num, void* buf, ssize_t size);
-int save_imap(struct super_block* sb, uint64_t inode_num, uint8_t value);
-int save_bmap(struct super_block* sb, uint64_t block_num, uint8_t value);
+int save_bmap(struct super_block* sb, uint8_t* bmap, ssize_t bmap_size);
+int set_and_save_imap(struct super_block* sb, uint64_t inode_num, uint8_t value);
+int set_and_save_bmap(struct super_block* sb, uint64_t block_num, uint8_t value);
 int save_super(struct super_block* sb);
 
 int HUST_fs_get_block(struct inode *inode, sector_t block,
                        struct buffer_head *bh, int create);
-
+int alloc_block_for_inode(struct super_block* sb, struct HUST_inode* p_H_inode, ssize_t size);
 int HUST_fs_readpage(struct file *file, struct page *page);
 int HUST_fs_get_inode(struct super_block *sb,
 		uint64_t inode_no, struct HUST_inode* inode);

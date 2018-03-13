@@ -56,7 +56,7 @@ int HUST_fs_writepage(struct page* page, struct writeback_control* wbc) {
 int HUST_fs_write_begin(struct file* file, struct address_space* mapping, 
 		loff_t pos, unsigned len, unsigned flags, 
 		struct page** pagep, void** fsdata) {
-	printk("HUST: in write_begin\n");
+	printk(KERN_ERR "HUST: in write_begin\n");
 	int ret;
     ret = block_write_begin(mapping, pos, len, flags, pagep, HUST_fs_get_block);
     if (unlikely(ret))
@@ -70,22 +70,49 @@ const struct address_space_operations HUST_fs_aops = {
 	.write_begin = HUST_fs_write_begin,
 	.write_end = generic_write_end,
 };
-
+int alloc_block_for_inode(struct super_block* sb, struct HUST_inode* p_H_inode, ssize_t size)
+{
+    ssize_t alloc_blocks = size - p_H_inode->blocks;
+    if(size + p_H_inode->blocks > HUST_N_BLOCKS)
+        return -ENOSPC;
+    struct HUST_fs_super_block* disk_sb = sb->s_fs_info;
+    //read bmap
+    ssize_t bmap_size = disk_sb->blocks_count/8;
+    uint8_t* bmap = kmalloc(bmap_size, GFP_KERNEL);
+    if(get_bmap(sb, bmap, bmap_size))
+    {
+        kfree(bmap);
+        return -EFAULT;
+    }
+    unsigned int i;
+    for(i = 0; i < alloc_blocks; ++i) {
+        uint64_t empty_blk_num = HUST_find_first_zero_bit(bmap, disk_sb->blocks_count / 8);
+        p_H_inode->block[p_H_inode->blocks] = empty_blk_num;
+        p_H_inode->blocks++;
+        uint64_t bit_off = empty_blk_num % (HUST_BLOCKSIZE*8);
+        setbit(bmap[bit_off/8], bit_off%8);
+    }
+    save_bmap(sb,bmap,bmap_size);
+    save_inode(sb,*p_H_inode);
+    kfree(bmap);
+    return 0;
+}
 int HUST_fs_get_block(struct inode *inode, sector_t block,
 		      struct buffer_head *bh, int create)
 {
 	struct super_block *sb = inode->i_sb;
-	uint64_t data_block;
+	
 	printk(KERN_ERR "HUST: get block [%llu] of inode [%llu]\n", block,
 	       inode->i_ino);
-	if (block > 0) {
+	if (block > HUST_N_BLOCKS) {
 		return -ENOSPC;
 	}
 	struct HUST_inode H_inode;
 	if (-1 == HUST_fs_get_inode(sb, inode->i_ino, &H_inode))
 		return -EFAULT;
-	if (H_inode.blocks == 0)
-		return -EFAULT;
+	if (H_inode.blocks == 0){
+        alloc_block_for_inode(sb, &H_inode, 1);
+    }
 	map_bh(bh, sb, H_inode.block[0]);
 	return 0;
 }
@@ -156,7 +183,7 @@ int HUST_fs_create_obj(struct inode *dir, struct dentry *dentry, umode_t mode)
         dir_arr[2].inode_no = dir->i_ino;    
         save_inode(sb, obj_inode);
         save_block(sb, first_empty_block_num, dir_arr, sizeof(struct HUST_dir_record)*2);
-        save_bmap(sb, first_empty_block_num, 1);
+        set_and_save_bmap(sb, first_empty_block_num, 1);
         
         //update dir
     
@@ -166,6 +193,7 @@ int HUST_fs_create_obj(struct inode *dir, struct dentry *dentry, umode_t mode)
         inode->i_size = 0;
         inode->i_blocks = 0;
         inode->i_fop = &HUST_fs_file_ops;
+        inode->i_mapping->a_ops = &HUST_fs_aops;
         obj_inode.blocks = 0;
         obj_inode.file_size = 0;
         
@@ -185,7 +213,7 @@ int HUST_fs_create_obj(struct inode *dir, struct dentry *dentry, umode_t mode)
     H_dir_inode.dir_children_count += 1;
     save_inode(sb, H_dir_inode);
         
-    save_imap(sb, first_empty_inode_num, 1);
+    set_and_save_imap(sb, first_empty_inode_num, 1);
     insert_inode_hash(inode);
     mark_inode_dirty(inode);
     mark_inode_dirty(dir);
@@ -561,9 +589,28 @@ uint64_t HUST_fs_get_empty_inode(struct super_block* sb)
     struct HUST_fs_super_block *disk_sb = sb->s_fs_info;
     //read imap
     
-    uint64_t imap_size = disk_sb->blocks_count / 8;
-	printk(KERN_INFO "imap_size is %llu\n", imap_size);
+    ssize_t imap_size = disk_sb->blocks_count / 8;
+	
 	uint8_t *imap = kmalloc(imap_size, GFP_KERNEL);
+    if(0!=get_imap(sb, imap, imap_size))
+    {
+        kfree(imap);
+        return -EFAULT;
+    }
+	
+	uint64_t empty_ilock_num = HUST_find_first_zero_bit(imap, disk_sb->blocks_count / 8);
+	printk(KERN_INFO "HUST_find_first_zero_bit at %llu\n",
+	       empty_ilock_num);
+    kfree(imap);
+    return empty_ilock_num;
+}
+int get_imap(struct super_block* sb, uint8_t* imap, ssize_t imap_size)
+{
+    if(!imap) {
+        return -EFAULT;
+    }
+    struct HUST_fs_super_block *disk_sb = sb->s_fs_info;
+    //read imap
 	uint64_t i;
 	for (i = disk_sb->imap_block;
 	     i < disk_sb->data_block_number && imap_size != 0; ++i) {
@@ -585,40 +632,48 @@ uint64_t HUST_fs_get_empty_inode(struct super_block* sb)
 		}
 		brelse(bh);
 	}
-	uint64_t empty_ilock_num = HUST_find_first_zero_bit(imap, disk_sb->blocks_count / 8);
-	printk(KERN_INFO "HUST_find_first_zero_bit at %llu\n",
-	       empty_ilock_num);
-    kfree(imap);
-    return empty_ilock_num;
+    return 0;
+}
+int get_bmap(struct super_block* sb, uint8_t* bmap, ssize_t bmap_size)
+{
+    if(!bmap) {
+        return -EFAULT;
+    }
+    struct HUST_fs_super_block *disk_sb = sb->s_fs_info;
+	
+	uint64_t i;
+	for (i = disk_sb->bmap_block;
+	     i < disk_sb->imap_block && bmap_size != 0; ++i) {
+		struct buffer_head *bh;
+		bh = sb_bread(sb, i);
+		if (!bh) {
+			printk(KERN_ERR "bh empty\n");
+            return -EFAULT;
+		}
+		uint8_t *bmap_t = (uint8_t *) bh->b_data;
+		if (bmap_size >= HUST_BLOCKSIZE) {
+			memcpy(bmap, bmap_t, HUST_BLOCKSIZE);
+			bmap_size -= HUST_BLOCKSIZE;
+		} else {
+			memcpy(bmap, bmap_t, bmap_size);
+			bmap_size = 0;
+		}
+		brelse(bh);
+	}
+	return 0;
 }
 uint64_t HUST_fs_get_empty_block(struct super_block* sb)
 {
 	struct HUST_fs_super_block *disk_sb = sb->s_fs_info;
 	
-	//read imap and bmap
+	//read imap
 	uint64_t bmap_empty = disk_sb->blocks_count / 8;
 	printk(KERN_INFO "bmap_empty is %llu\n", bmap_empty);
 	uint8_t *bmap = kmalloc(bmap_empty, GFP_KERNEL);
-	uint64_t i;
-	for (i = disk_sb->bmap_block;
-	     i < disk_sb->imap_block && bmap_empty != 0; ++i) {
-		struct buffer_head *bh;
-		bh = sb_bread(sb, i);
-
-		if (!bh) {
-			printk(KERN_ERR "bh empty\n");
-		}
-		uint8_t *bmap_t = (uint8_t *) bh->b_data;
-		printk(KERN_INFO "bmap is %x\n", bmap_t[0]);
-		if (bmap_empty >= HUST_BLOCKSIZE) {
-			memcpy(bmap, bmap_t, HUST_BLOCKSIZE);
-			bmap_empty -= HUST_BLOCKSIZE;
-		} else {
-			memcpy(bmap, bmap_t, bmap_empty);
-			bmap_empty = 0;
-		}
-		brelse(bh);
-	}
+    if(get_bmap(sb, bmap, bmap_empty)!=0) {
+        kfree(bmap);
+        return -EFAULT;
+    }
 	uint64_t empty_block_num = HUST_find_first_zero_bit(bmap, disk_sb->blocks_count / 8);
 	printk(KERN_INFO "HUST_find_first_zero_bit at %llu\n",
 	       empty_block_num);
@@ -626,7 +681,7 @@ uint64_t HUST_fs_get_empty_block(struct super_block* sb)
     return empty_block_num;
 }
 
-int save_imap(struct super_block* sb, uint64_t inode_num, uint8_t value)
+int set_and_save_imap(struct super_block* sb, uint64_t inode_num, uint8_t value)
 {
     /*
      * 1. find one block we want to change;
@@ -700,14 +755,28 @@ int save_block(struct super_block* sb, uint64_t block_num, void* buf, ssize_t si
     brelse(bh);
     return 0;
 }
-int save_bmap(struct super_block* sb, uint64_t block_num, uint8_t value)
+int save_bmap(struct super_block* sb, uint8_t* bmap, ssize_t bmap_size)
+{
+    struct HUST_fs_super_block *disk_sb = sb->s_fs_info;
+    uint64_t block_idx = disk_sb->bmap_block;
+    struct buffer_head* bh;
+    bh = sb_bread(sb, block_idx);
+    
+    printk(KERN_ERR "In save bmap\n");
+    memcpy(bh->b_data, bmap, bmap_size);
+    
+    map_bh(bh, sb, block_idx);
+    brelse(bh);
+    return 0;
+}
+int set_and_save_bmap(struct super_block* sb, uint64_t block_num, uint8_t value)
 {
         /*
      * 1. find one block we want to change;
      * 2. write the block
      */
     struct HUST_fs_super_block *disk_sb = sb->s_fs_info;
-    uint64_t block_idx = block_num / (HUST_BLOCKSIZE*8) + disk_sb->imap_block;
+    uint64_t block_idx = block_num / (HUST_BLOCKSIZE*8) + disk_sb->bmap_block;
     uint64_t bit_off = block_num % (HUST_BLOCKSIZE*8);
     
     struct buffer_head* bh;
