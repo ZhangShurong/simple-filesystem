@@ -19,6 +19,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <string.h>
+#include <linux/stat.h>
 
 #include "constants.h"
 

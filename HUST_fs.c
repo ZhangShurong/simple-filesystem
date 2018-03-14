@@ -44,12 +44,33 @@ const struct inode_operations HUST_fs_inode_ops = {
     .unlink = HUST_fs_unlink,
 };
 
-/*
-const struct super_operations oneblockfs_super_ops = {
+
+const struct super_operations HUST_fs_super_ops = {
     .evict_inode = HUST_evict_inode,
     .write_inode = HUST_write_inode,
 };
-*/
+int HUST_write_inode(struct inode *inode, struct writeback_control *wbc)
+{
+    struct buffer_head * bh;
+	struct HUST_inode * raw_inode;
+    HUST_fs_get_inode(inode->i_sb, inode->i_ino, raw_inode);
+	int i;
+	if (!raw_inode)
+		return -EFAULT;
+	raw_inode->mode = inode->i_mode;
+	//raw_inode->i_uid = fs_high2lowuid(i_uid_read(inode));
+	//raw_inode->i_gid = fs_high2lowgid(i_gid_read(inode));
+	//raw_inode->i_nlinks = inode->i_nlink;
+	raw_inode->file_size = inode->i_size;
+	//raw_inode->i_time = inode->i_mtime.tv_sec;
+	mark_buffer_dirty(bh);
+	brelse(bh);
+    return 0;
+}
+void HUST_evict_inode(struct inode *inode)
+{
+    
+}
 int HUST_fs_writepage(struct page* page, struct writeback_control* wbc) {
 	printk(KERN_ERR "HUST: in write page\n");
        return block_write_full_page(page, HUST_fs_get_block, wbc);
@@ -95,6 +116,7 @@ int alloc_block_for_inode(struct super_block* sb, struct HUST_inode* p_H_inode, 
     }
     save_bmap(sb,bmap,bmap_size);
     save_inode(sb,*p_H_inode);
+    disk_sb->free_blocks -= size;
     kfree(bmap);
     return 0;
 }
@@ -257,6 +279,7 @@ int HUST_fs_unlink(struct inode *dir, struct dentry *dentry)
             break;
         }
     }
+    set_and_save_imap(sb, inode->i_ino, 0);
     inode_dec_link_count(inode);
     mark_inode_dirty(inode);
     kfree(buf);
@@ -526,7 +549,8 @@ struct dentry *HUST_fs_lookup(struct inode *parent_inode,
 				}
 
 					printk(KERN_ERR "in case c");
-				/* XXX Clarify meaning of this function. */
+				inode->i_mode = H_child_inode.mode;
+                inode->i_size = H_child_inode.file_size;
 				insert_inode_hash(inode);
 				printk(KERN_ERR "inode->i_sb is %llu and sb is %llu\n", (uint64_t) inode->i_sb, (uint64_t)sb);
 				unlock_new_inode(inode);
@@ -582,14 +606,14 @@ int HUST_fs_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_magic = sb_disk->magic;
 	sb->s_fs_info = sb_disk;
 	sb->s_maxbytes = HUST_BLOCKSIZE * HUST_N_BLOCKS;	/* Max file size */
-	//TODO sd->s_op = HUST_sops;
+	sb->s_op = &HUST_fs_super_ops;
 
 	//-----------test get inode-----
-	struct HUST_inode root_node;
-	if (HUST_fs_get_inode(sb, HUST_ROOT_INODE_NUM, &root_node) != -1) {
+	struct HUST_inode raw_root_node;
+	if (HUST_fs_get_inode(sb, HUST_ROOT_INODE_NUM, &raw_root_node) != -1) {
 		printk(KERN_INFO "Get inode sucessfully!\n");
 		printk(KERN_INFO "root blocks is %llu and block[0] is %llu\n",
-		       root_node.blocks, root_node.block[0]);
+		       raw_root_node.blocks, raw_root_node.block[0]);
 	}
 	//-----------end test-----------
 
@@ -607,7 +631,9 @@ int HUST_fs_fill_super(struct super_block *sb, void *data, int silent)
 	root_inode->i_ino = HUST_ROOT_INODE_NUM;
 	root_inode->i_atime = root_inode->i_mtime = root_inode->i_ctime =
 	    current_time(root_inode);
-
+    
+    root_inode->i_mode = raw_root_node.mode;
+    root_inode->i_size = raw_root_node.dir_children_count;
 	//root_inode->i_private = HUST_fs_get_inode(sb, HUST_ROOT_INODE_NUM);
 	/* Doesn't really matter. Since this is a directory, it "should"
 	 * have a link count of 2. See btrfs, though, where directories
@@ -933,7 +959,12 @@ int set_and_save_bmap(struct super_block* sb, uint64_t block_num, uint8_t value)
 int save_super(struct super_block* sb)
 {
     struct HUST_fs_super_block *disk_sb = sb->s_fs_info;
-    
+    struct buffer_head* bh;
+    bh = sb_bread(sb, 1);
+    printk(KERN_ERR "In save bmap\n");
+    memcpy(bh->b_data, disk_sb, HUST_BLOCKSIZE);
+    map_bh(bh, sb, 1);
+    brelse(bh);
 	return 0;
 }
 

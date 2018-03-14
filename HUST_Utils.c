@@ -92,7 +92,7 @@ uint64_t HUST_fs_get_empty_block(struct super_block* sb, uint64_t inode_no)
     return empty_block_num;
 }
 
-int save_imap(struct super_block* sb, uint64_t inode_num, uint8_t value)
+int set_and_save_imap(struct super_block* sb, uint64_t inode_num, uint8_t value)
 {
     /*
      * 1. find one block we want to change;
@@ -123,7 +123,7 @@ int save_imap(struct super_block* sb, uint64_t inode_num, uint8_t value)
     //-----
     return 0;
 }
-int save_bmap(struct super_block* sb, uint64_t block_num, uint8_t value)
+int set_and_save_bmap(struct super_block* sb, uint64_t block_num, uint8_t value)
 {
     return 0;
 }
