@@ -53,6 +53,8 @@ struct HUST_dir_record {
 };
 
 //Utils
+ssize_t HUST_read_inode_data(struct inode* inode,void* buf, size_t size);
+ssize_t HUST_write_inode_data(struct inode* inode, const void *buf, size_t count);
 int HUST_find_first_zero_bit(const void *vaddr, unsigned size);
 int get_bmap(struct super_block* sb, uint8_t* bmap, ssize_t bmap_size);
 int get_imap(struct super_block* sb, uint8_t* imap, ssize_t imap_size);
@@ -76,7 +78,7 @@ int HUST_fs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode);
 int HUST_fs_create(struct inode *dir, struct dentry *dentry, umode_t mode,bool excl);
 
 int HUST_fs_create_obj(struct inode *dir, struct dentry *dentry, umode_t mode);
-
+int HUST_fs_unlink(struct inode *dir, struct dentry *dentry);
 int HUST_fs_iterate(struct file *filp, struct dir_context *ctx);
 
 struct dentry *HUST_fs_lookup(struct inode *parent_inode, struct dentry *child_dentry,

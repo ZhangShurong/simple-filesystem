@@ -41,6 +41,7 @@ const struct inode_operations HUST_fs_inode_ops = {
 	.lookup = HUST_fs_lookup,
 	.mkdir = HUST_fs_mkdir,
     .create = HUST_fs_create,
+    .unlink = HUST_fs_unlink,
 };
 
 /*
@@ -111,8 +112,11 @@ int HUST_fs_get_block(struct inode *inode, sector_t block,
 	if (-1 == HUST_fs_get_inode(sb, inode->i_ino, &H_inode))
 		return -EFAULT;
 	if (H_inode.blocks == 0){
-        alloc_block_for_inode(sb, &H_inode, 1);
+        if(alloc_block_for_inode(sb, &H_inode, 1)) {
+            return -EFAULT;
+        }
     }
+    mark_inode_dirty(inode);
 	map_bh(bh, sb, H_inode.block[0]);
 	return 0;
 }
@@ -130,6 +134,134 @@ int HUST_fs_create(struct inode *dir, struct dentry *dentry, umode_t mode,bool e
 int HUST_fs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 {
 	return HUST_fs_create_obj(dir, dentry, S_IFDIR | mode);
+}
+ssize_t HUST_write_inode_data(struct inode* inode, const void *buf, size_t count)
+{
+    if(!buf) {
+        printk(KERN_ERR "HUST: buf is null\n");
+        return -EFAULT;
+    }
+    if(count > HUST_BLOCKSIZE*HUST_N_BLOCKS) {
+        return -ENOSPC;
+    }
+    
+    struct super_block *sb = inode->i_sb;
+    struct HUST_inode H_inode;
+    if (-1 == HUST_fs_get_inode(sb, inode->i_ino, &H_inode)){
+        printk(KERN_ERR "HUST: cannot read inode\n");
+		return -EFAULT;
+    }
+    if(count > HUST_BLOCKSIZE*H_inode.blocks) {
+        int ret;
+        ret = alloc_block_for_inode(sb, &H_inode, 
+                              (count - HUST_BLOCKSIZE*H_inode.blocks) /HUST_BLOCKSIZE);
+        if(ret) {
+            return -EFAULT;
+        }
+        mark_inode_dirty(inode);
+    }
+    size_t count_res = count;
+    int i;
+    i = 0;
+    while(count_res && i < HUST_N_BLOCKS) {
+        struct buffer_head* bh;
+        bh = sb_bread(sb, H_inode.block[i]);
+        BUG_ON(!bh);
+        size_t cpy_size;
+        if(count_res >= HUST_BLOCKSIZE) {
+            count_res -= HUST_BLOCKSIZE;
+            cpy_size = HUST_BLOCKSIZE;
+        }
+        else {
+            count_res = 0;
+            cpy_size = count_res;
+        }
+        memcpy(bh->b_data, buf+i*HUST_BLOCKSIZE, cpy_size);
+        map_bh(bh, sb,H_inode.block[i]);
+        i++;
+        brelse(bh);
+    }
+    while(i < H_inode.blocks) {
+        struct buffer_head* bh;
+        bh = sb_bread(sb, H_inode.block[i]);
+        BUG_ON(!bh);
+        memset(bh->b_data, 0, HUST_BLOCKSIZE);
+        map_bh(bh, sb, H_inode.block[i]);
+        brelse(bh);
+        i++;
+    }
+    return count;
+}
+ssize_t HUST_read_inode_data(struct inode* inode,void* buf, size_t size)
+{
+    if(!buf) {
+        printk(KERN_ERR "HUST: buf is null\n");
+        return 0;
+    }
+    memset(buf, 0, size);
+    struct super_block *sb = inode->i_sb;
+	printk(KERN_INFO "HUST: read inode [%llu]\n", inode->i_ino);
+	struct HUST_inode H_inode;
+	if (-1 == HUST_fs_get_inode(sb, inode->i_ino, &H_inode)){
+        printk(KERN_ERR "HUST: cannot read inode\n");
+		return -EFAULT;
+    }
+    int i;
+    for(i = 0; i < H_inode.blocks; ++i) {
+        struct buffer_head* bh;
+        bh = sb_bread(sb, H_inode.block[i]);
+        BUG_ON(!bh);
+        if((i+1)*HUST_BLOCKSIZE > size){
+            brelse(bh);
+            return i*HUST_BLOCKSIZE;
+        }
+        memcpy(buf + i*(HUST_BLOCKSIZE), bh->b_data, HUST_BLOCKSIZE);
+        brelse(bh);
+    }
+	return i*(HUST_BLOCKSIZE);
+}
+int HUST_fs_unlink(struct inode *dir, struct dentry *dentry)
+{
+    struct super_block* sb = dir->i_sb;
+    printk(KERN_INFO "HUST: unlink [%s] from dir inode [%lu]\n",
+           dentry->d_name.name, dir->i_ino);
+    struct HUST_inode H_dir_inode;
+    if(HUST_fs_get_inode(sb, dir->i_ino,&H_dir_inode)) {
+       return -EFAULT; 
+    }
+    ssize_t buf_size = H_dir_inode.blocks*HUST_BLOCKSIZE;
+    void* buf = kmalloc(buf_size, GFP_KERNEL);
+    if(HUST_read_inode_data(dir, buf, buf_size) != buf_size) {
+        printk(KERN_ERR "HUST_read_inode_data failed\n");
+        kfree(buf);
+        return -EFAULT;
+    }
+    struct inode *inode = d_inode(dentry);
+    int i;
+    struct HUST_dir_record* p_dir;
+    p_dir = (struct HUST_dir_record*) buf;
+    for(i = 0; i < H_dir_inode.dir_children_count; ++i) {
+        if(strncmp(dentry->d_name.name, p_dir[i].filename, HUST_FILENAME_MAX_LEN)) {
+            /* We have found our directory entry. We can now clear i
+             * and then decrease the inode's link count. 
+             */
+            H_dir_inode.dir_children_count -= 1;
+            
+            //remove it from buf
+            struct HUST_dir_record* new_buf = kmalloc(buf_size - sizeof(struct HUST_dir_record), GFP_KERNEL);
+            memcpy(new_buf, p_dir, (i)*sizeof(struct HUST_dir_record));
+            memcpy(new_buf + i, p_dir + i + 1, 
+                       (H_dir_inode.dir_children_count -i- 1)*sizeof(struct HUST_dir_record));
+            HUST_write_inode_data(dir, new_buf, buf_size - sizeof(struct HUST_dir_record));
+            kfree(new_buf);
+            break;
+        }
+    }
+    inode_dec_link_count(inode);
+    mark_inode_dirty(inode);
+    kfree(buf);
+    save_inode(sb, H_dir_inode);
+    return 0;
 }
 
 int HUST_fs_create_obj(struct inode *dir, struct dentry *dentry, umode_t mode)
