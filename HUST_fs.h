@@ -54,7 +54,7 @@ struct HUST_dir_record {
 
 //Utils
 int HUST_write_inode(struct inode *inode, struct writeback_control *wbc);
-void HUST_evict_inode(struct inode *inode);
+void HUST_evict_inode(struct inode *vfs_inode);
 ssize_t HUST_read_inode_data(struct inode* inode,void* buf, size_t size);
 ssize_t HUST_write_inode_data(struct inode* inode, const void *buf, size_t count);
 int HUST_find_first_zero_bit(const void *vaddr, unsigned size);

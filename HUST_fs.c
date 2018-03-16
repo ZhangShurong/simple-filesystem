@@ -67,9 +67,34 @@ int HUST_write_inode(struct inode *inode, struct writeback_control *wbc)
 	brelse(bh);
     return 0;
 }
-void HUST_evict_inode(struct inode *inode)
+void HUST_evict_inode(struct inode *vfs_inode)
 {
-    
+    struct super_block *sb = vfs_inode->i_sb;
+    struct HUST_fs_super_block *raw_super = sb->s_fs_info;
+    struct HUST_inode* iptr;
+    struct buffer_head *bh;
+    uint64_t i;
+
+    /* Documentation on evict_inode is very scarce or I simply haven't
+     * found it, yet. Documentation/filesystems/porting says, we have to
+     * call clear_inode(). We also have to call
+     * truncate_inode_pages_final(), because we get a panic otherwise. */
+    printk(KERN_INFO "HUST evict: Clearing inode [%lu]\n", vfs_inode->i_ino);
+    truncate_inode_pages_final(&vfs_inode->i_data);
+    clear_inode(vfs_inode);
+
+    /* And that's pretty much it. What else do we have to do? The code
+     * of minix suggests that we can now check if the link count dropped
+     * to zero and maybe delete the inode from disk: */
+    if (vfs_inode->i_nlink)
+    {
+        printk(KERN_INFO "HUST evict: Inode [%lu] still has links\n", vfs_inode->i_ino);
+        return;
+    }
+
+    printk(KERN_INFO "HUST evict: Inode [%lu] has no links!\n", vfs_inode->i_ino);
+    set_and_save_imap(sb, vfs_inode->i_ino, 0);
+    return;
 }
 int HUST_fs_writepage(struct page* page, struct writeback_control* wbc) {
 	printk(KERN_ERR "HUST: in write page\n");
@@ -279,7 +304,6 @@ int HUST_fs_unlink(struct inode *dir, struct dentry *dentry)
             break;
         }
     }
-    set_and_save_imap(sb, inode->i_ino, 0);
     inode_dec_link_count(inode);
     mark_inode_dirty(inode);
     kfree(buf);
@@ -881,7 +905,8 @@ int save_inode(struct super_block* sb, struct HUST_inode H_inode)
     //1. read disk inode
     struct buffer_head* bh;
     bh = sb_bread(sb, block_idx);
-    printk(KERN_ERR "In save inode and inode_no is %llu\n", inode_num);
+    printk(KERN_ERR "In save inode and inode_no is %llu and block_idx is %llu and bh is %llu\n", 
+           inode_num, block_idx, sb);
     BUG_ON(!bh);
     
     //2. change disk inode, TODO:verify inode
