@@ -1,5 +1,5 @@
 obj-m := HUST_fs.o
-HUST_fs-objs := inode.o
+HUST_fs-objs := inode.o map.o block.o file.o super.o
 
 all: drive mkfs
 
