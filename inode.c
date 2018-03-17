@@ -1,25 +1,15 @@
-/*
- * Based on psankar's simplefs:
- * https://github.com/psankar/simplefs */
-
 #include "constants.h"
 #include "HUST_fs.h"
 
-/* Information about our filesystem, available operations, ...
- *
- * Note that this does *not* specify available operations on filesystem
- * objects such as files. */
+/* Information about our filesystem, available operations
+ */
+
 struct file_system_type HUST_fs_type = {
 	.owner = THIS_MODULE,
 	.name = "HUST_fs",
 	.mount = HUST_fs_mount,
 	.kill_sb = HUST_fs_kill_superblock,	/* unmount */
 };
-//for test
-ssize_t HUST_file_read_iter(struct file* filp, char* buf, size_t len, loff_t* ppos){
-	printk(KERN_ERR "filp->f_inode is %llu\n", filp->f_inode->i_ino);
-	return 0;
-}
 
 const struct file_operations HUST_fs_file_ops = {
 	.owner = THIS_MODULE,
@@ -27,8 +17,6 @@ const struct file_operations HUST_fs_file_ops = {
 	.mmap = generic_file_mmap,
 	.fsync = generic_file_fsync,
 	.read_iter = generic_file_read_iter,
-//	.read = HUST_file_read_iter,
-
 	.write_iter = generic_file_write_iter,
 };
 
@@ -44,17 +32,23 @@ const struct inode_operations HUST_fs_inode_ops = {
     .unlink = HUST_fs_unlink,
 };
 
-
 const struct super_operations HUST_fs_super_ops = {
     .evict_inode = HUST_evict_inode,
     .write_inode = HUST_write_inode,
 };
+
+const struct address_space_operations HUST_fs_aops = {
+	.readpage = HUST_fs_readpage,
+    .writepage = HUST_fs_writepage,
+	.write_begin = HUST_fs_write_begin,
+	.write_end = generic_write_end,
+};
+
 int HUST_write_inode(struct inode *inode, struct writeback_control *wbc)
 {
     struct buffer_head * bh;
-	struct HUST_inode * raw_inode;
+	struct HUST_inode * raw_inode = NULL;
     HUST_fs_get_inode(inode->i_sb, inode->i_ino, raw_inode);
-	int i;
 	if (!raw_inode)
 		return -EFAULT;
 	raw_inode->mode = inode->i_mode;
@@ -67,13 +61,10 @@ int HUST_write_inode(struct inode *inode, struct writeback_control *wbc)
 	brelse(bh);
     return 0;
 }
+
 void HUST_evict_inode(struct inode *vfs_inode)
 {
     struct super_block *sb = vfs_inode->i_sb;
-    struct HUST_fs_super_block *raw_super = sb->s_fs_info;
-    struct HUST_inode* iptr;
-    struct buffer_head *bh;
-    uint64_t i;
 
     /* Documentation on evict_inode is very scarce or I simply haven't
      * found it, yet. Documentation/filesystems/porting says, we have to
@@ -103,35 +94,35 @@ int HUST_fs_writepage(struct page* page, struct writeback_control* wbc) {
 int HUST_fs_write_begin(struct file* file, struct address_space* mapping, 
 		loff_t pos, unsigned len, unsigned flags, 
 		struct page** pagep, void** fsdata) {
-	printk(KERN_ERR "HUST: in write_begin\n");
-	int ret;
+    int ret;
+	printk(KERN_INFO "HUST: in write_begin\n");
     ret = block_write_begin(mapping, pos, len, flags, pagep, HUST_fs_get_block);
     if (unlikely(ret))
-        printk(KERN_ERR "HUST: Write failed for pos [%llu], len [%u]\n", pos, len);
-
+        printk(KERN_INFO "HUST: Write failed for pos [%llu], len [%u]\n", pos, len);
     return ret;
 }
-const struct address_space_operations HUST_fs_aops = {
-	.readpage = HUST_fs_readpage,
-	 .writepage = HUST_fs_writepage,
-	.write_begin = HUST_fs_write_begin,
-	.write_end = generic_write_end,
-};
 int alloc_block_for_inode(struct super_block* sb, struct HUST_inode* p_H_inode, ssize_t size)
 {
+    struct HUST_fs_super_block* disk_sb;
+    ssize_t bmap_size;
+    uint8_t* bmap;
+    unsigned int i;
+    
     ssize_t alloc_blocks = size - p_H_inode->blocks;
-    if(size + p_H_inode->blocks > HUST_N_BLOCKS)
+    if(size + p_H_inode->blocks > HUST_N_BLOCKS){
         return -ENOSPC;
-    struct HUST_fs_super_block* disk_sb = sb->s_fs_info;
+    }
     //read bmap
-    ssize_t bmap_size = disk_sb->blocks_count/8;
-    uint8_t* bmap = kmalloc(bmap_size, GFP_KERNEL);
+    disk_sb = sb->s_fs_info;
+    bmap_size = disk_sb->blocks_count/8;
+    bmap = kmalloc(bmap_size, GFP_KERNEL);
+    
     if(get_bmap(sb, bmap, bmap_size))
     {
         kfree(bmap);
         return -EFAULT;
     }
-    unsigned int i;
+    
     for(i = 0; i < alloc_blocks; ++i) {
         uint64_t empty_blk_num = HUST_find_first_zero_bit(bmap, disk_sb->blocks_count / 8);
         p_H_inode->block[p_H_inode->blocks] = empty_blk_num;
@@ -150,7 +141,7 @@ int HUST_fs_get_block(struct inode *inode, sector_t block,
 {
 	struct super_block *sb = inode->i_sb;
 	
-	printk(KERN_ERR "HUST: get block [%llu] of inode [%llu]\n", block,
+	printk(KERN_INFO "HUST: get block [%lu] of inode [%llu]\n", block,
 	       inode->i_ino);
 	if (block > HUST_N_BLOCKS) {
 		return -ENOSPC;
@@ -184,6 +175,11 @@ int HUST_fs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 }
 ssize_t HUST_write_inode_data(struct inode* inode, const void *buf, size_t count)
 {
+    struct super_block *sb;
+    struct HUST_inode H_inode;
+    
+    sb = inode->i_sb;
+    
     if(!buf) {
         printk(KERN_ERR "HUST: buf is null\n");
         return -EFAULT;
@@ -192,8 +188,6 @@ ssize_t HUST_write_inode_data(struct inode* inode, const void *buf, size_t count
         return -ENOSPC;
     }
     
-    struct super_block *sb = inode->i_sb;
-    struct HUST_inode H_inode;
     if (-1 == HUST_fs_get_inode(sb, inode->i_ino, &H_inode)){
         printk(KERN_ERR "HUST: cannot read inode\n");
 		return -EFAULT;
@@ -992,5 +986,3 @@ int save_super(struct super_block* sb)
     brelse(bh);
 	return 0;
 }
-
-
