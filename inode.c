@@ -1,6 +1,6 @@
 #include "constants.h"
 #include "HUST_fs.h"
-
+#include <linux/time.h>
 
 extern struct file_operations HUST_fs_file_ops ;
 
@@ -22,6 +22,11 @@ int HUST_write_inode(struct inode *inode, struct writeback_control *wbc)
 	raw_inode->i_gid = fs_high2lowgid(i_gid_read(inode));
 	raw_inode->i_nlink = inode->i_nlink;
 	raw_inode->file_size = inode->i_size;
+    
+    raw_inode->i_atime = (inode->i_atime.tv_sec);
+    raw_inode->i_mtime = (inode->i_mtime.tv_sec);
+    raw_inode->i_ctime = (inode->i_ctime.tv_sec);
+    
 	//raw_inode->i_time = inode->i_mtime.tv_sec;
 	mark_buffer_dirty(bh);
 	brelse(bh);
@@ -216,6 +221,12 @@ int HUST_fs_create_obj(struct inode *dir, struct dentry *dentry, umode_t mode)
     raw_inode.i_uid = i_uid_read(inode);
     raw_inode.i_gid = i_gid_read(inode);
     raw_inode.i_nlink = inode->i_nlink;
+    struct timespec current_time;
+    getnstimeofday(&current_time);
+    inode->i_mtime = inode->i_atime = inode->i_ctime = current_time;
+    raw_inode.i_atime = (inode->i_atime.tv_sec);
+	raw_inode.i_ctime = (inode->i_ctime.tv_sec);
+	raw_inode.i_mtime = (inode->i_mtime.tv_sec);
     
     raw_inode.mode = mode;
     if(S_ISDIR(mode)) {
@@ -320,6 +331,9 @@ void HUST_fs_convert_inode(struct HUST_inode *H_inode, struct inode *vfs_inode)
     set_nlink(vfs_inode, H_inode->i_nlink);
     i_uid_write(vfs_inode, H_inode->i_uid);
     i_gid_write(vfs_inode, H_inode->i_gid);
+    vfs_inode->i_atime.tv_sec = H_inode->i_atime;
+    vfs_inode->i_ctime.tv_sec = H_inode->i_ctime;
+    vfs_inode->i_mtime.tv_sec = H_inode->i_mtime;
     
 	//vfs_inode->i_private = *H_inode;
 }

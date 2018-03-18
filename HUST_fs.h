@@ -43,7 +43,10 @@ struct HUST_inode {
     int32_t i_uid; 
     int32_t i_gid;
     int32_t i_nlink;
-    char padding[8];
+    int64_t i_atime;
+    int64_t i_mtime;
+    int64_t i_ctime;
+    char padding[112];
 };
 
 #define HUST_INODE_SIZE sizeof(struct HUST_inode)

@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <time.h>
 #include <string.h>
 #include <endian.h>
 #include <linux/stat.h>
@@ -59,7 +60,11 @@ struct HUST_inode {
     int32_t i_uid; 
     int32_t i_gid;
     int32_t i_nlink;
-    char padding[8];
+    
+    int64_t i_atime;
+    int64_t i_mtime;
+    int64_t i_ctime;
+    char padding[112];
 };
 
 #define HUST_INODE_SIZE sizeof(struct HUST_inode)
@@ -202,6 +207,7 @@ static int write_itable(int fd)
     root_dir_inode.i_gid = _gid;
     root_dir_inode.i_uid = _uid;
     root_dir_inode.i_nlink = 2; 
+    root_dir_inode.i_atime = root_dir_inode.i_mtime = root_dir_inode.i_ctime = ((int64_t)time(NULL));
     
 	ret = write(fd, &root_dir_inode, sizeof(root_dir_inode));
 	if (ret != sizeof(root_dir_inode)) {
@@ -217,6 +223,7 @@ static int write_itable(int fd)
     onefile_inode.i_gid = _gid;
     onefile_inode.i_uid = _uid;
     onefile_inode.i_nlink = 1; 
+    onefile_inode.i_atime = onefile_inode.i_mtime = onefile_inode.i_ctime = ((int64_t)time(NULL));
 
 	ret = write(fd, &onefile_inode, sizeof(onefile_inode));
 	if (ret != sizeof(onefile_inode)) {
