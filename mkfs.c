@@ -19,6 +19,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <string.h>
+#include <endian.h>
 #include <linux/stat.h>
 
 #include "constants.h"
@@ -55,6 +56,10 @@ struct HUST_inode {
 		uint64_t file_size;
 		uint64_t dir_children_count;
 	};
+    int32_t i_uid; 
+    int32_t i_gid;
+    int32_t i_nlink;
+    char padding[8];
 };
 
 #define HUST_INODE_SIZE sizeof(struct HUST_inode)
@@ -184,6 +189,9 @@ static int write_imap(int fd)
 
 static int write_itable(int fd)
 {
+    uint32_t _uid = getuid();
+    uint32_t _gid = getgid();
+    
 	ssize_t ret;
 	struct HUST_inode root_dir_inode;
 	root_dir_inode.mode = S_IFDIR;
@@ -191,7 +199,10 @@ static int write_itable(int fd)
 	root_dir_inode.blocks = 1;
 	root_dir_inode.block[0] = super_block.data_block_number;
 	root_dir_inode.dir_children_count = 3;
-
+    root_dir_inode.i_gid = _gid;
+    root_dir_inode.i_uid = _uid;
+    root_dir_inode.i_nlink = 2; 
+    
 	ret = write(fd, &root_dir_inode, sizeof(root_dir_inode));
 	if (ret != sizeof(root_dir_inode)) {
 		perror("write_itable error!\n");
@@ -203,6 +214,9 @@ static int write_itable(int fd)
 	onefile_inode.blocks = 0;
 	onefile_inode.block[0] = 0;
 	onefile_inode.file_size = 0;
+    onefile_inode.i_gid = _gid;
+    onefile_inode.i_uid = _uid;
+    onefile_inode.i_nlink = 1; 
 
 	ret = write(fd, &onefile_inode, sizeof(onefile_inode));
 	if (ret != sizeof(onefile_inode)) {

@@ -18,9 +18,9 @@ int HUST_write_inode(struct inode *inode, struct writeback_control *wbc)
 	if (!raw_inode)
 		return -EFAULT;
 	raw_inode->mode = inode->i_mode;
-	//raw_inode->i_uid = fs_high2lowuid(i_uid_read(inode));
-	//raw_inode->i_gid = fs_high2lowgid(i_gid_read(inode));
-	//raw_inode->i_nlinks = inode->i_nlink;
+	raw_inode->i_uid = fs_high2lowuid(i_uid_read(inode));
+	raw_inode->i_gid = fs_high2lowgid(i_gid_read(inode));
+	raw_inode->i_nlink = inode->i_nlink;
 	raw_inode->file_size = inode->i_size;
 	//raw_inode->i_time = inode->i_mtime.tv_sec;
 	mark_buffer_dirty(bh);
@@ -204,23 +204,27 @@ int HUST_fs_create_obj(struct inode *dir, struct dentry *dentry, umode_t mode)
     uint64_t first_empty_inode_num = HUST_fs_get_empty_inode(dir->i_sb);
     BUG_ON(!first_empty_inode_num);
     struct inode* inode;
-    struct HUST_inode obj_inode;
+    struct HUST_inode raw_inode;
     inode = new_inode(sb);
     if(!inode) {
         return -ENOSPC;
     }
     inode->i_ino = first_empty_inode_num;
-    obj_inode.inode_no = first_empty_inode_num;
+    raw_inode.inode_no = first_empty_inode_num;
     inode_init_owner(inode, dir, mode);
     inode->i_op = &HUST_fs_inode_ops;
-    obj_inode.mode = mode;
+    raw_inode.i_uid = i_uid_read(inode);
+    raw_inode.i_gid = i_gid_read(inode);
+    raw_inode.i_nlink = inode->i_nlink;
+    
+    raw_inode.mode = mode;
     if(S_ISDIR(mode)) {
         inode->i_size = 1;
         inode->i_blocks = 1;    
         inode->i_fop = &HUST_fs_dir_ops;
         
-        obj_inode.blocks = 1;
-        obj_inode.dir_children_count = 2;
+        raw_inode.blocks = 1;
+        raw_inode.dir_children_count = 2;
         
         //2. write block
         if(disk_sb->free_blocks <= 0){
@@ -228,14 +232,14 @@ int HUST_fs_create_obj(struct inode *dir, struct dentry *dentry, umode_t mode)
         }        
         struct HUST_dir_record dir_arr[2];
         uint64_t first_empty_block_num = HUST_fs_get_empty_block(sb);
-        obj_inode.block[0] = first_empty_block_num;
+        raw_inode.block[0] = first_empty_block_num;
         const char* cur_dir = ".";
         const char* parent_dir = "..";
         memcpy(dir_arr[0].filename, cur_dir, strlen(cur_dir) + 1);
         dir_arr[0].inode_no = first_empty_inode_num;
         memcpy(dir_arr[1].filename, parent_dir, strlen(parent_dir) + 1);
         dir_arr[2].inode_no = dir->i_ino;    
-        save_inode(sb, obj_inode);
+        save_inode(sb, raw_inode);
         save_block(sb, first_empty_block_num, dir_arr, sizeof(struct HUST_dir_record)*2);
         set_and_save_bmap(sb, first_empty_block_num, 1);
         
@@ -247,11 +251,11 @@ int HUST_fs_create_obj(struct inode *dir, struct dentry *dentry, umode_t mode)
         inode->i_blocks = 0;
         inode->i_fop = &HUST_fs_file_ops;
         inode->i_mapping->a_ops = &HUST_fs_aops;
-        obj_inode.blocks = 0;
-        obj_inode.file_size = 0;
+        raw_inode.blocks = 0;
+        raw_inode.file_size = 0;
         
         //write inode
-        save_inode(sb, obj_inode);
+        save_inode(sb, raw_inode);
     }
     struct HUST_dir_record new_dir;
     memcpy(new_dir.filename, name, strlen(name)+1);
@@ -276,9 +280,9 @@ int HUST_fs_create_obj(struct inode *dir, struct dentry *dentry, umode_t mode)
 }
 
 int HUST_fs_get_inode(struct super_block *sb,
-		      uint64_t inode_no, struct HUST_inode *inode)
+		      uint64_t inode_no, struct HUST_inode *raw_inode)
 {
-	if (!inode) {
+	if (!raw_inode) {
 		printk(KERN_ERR "inode is null");
 		return -1;
 	}
@@ -301,8 +305,8 @@ int HUST_fs_get_inode(struct super_block *sb,
 		printk(KERN_ERR "in get_inode: out of index");
 		return -1;
 	}
-	memcpy(inode, H_inode_array + idx, sizeof(struct HUST_inode));
-	if (inode->inode_no != inode_no) {
+	memcpy(raw_inode, H_inode_array + idx, sizeof(struct HUST_inode));
+	if (raw_inode->inode_no != inode_no) {
 		printk(KERN_ERR "inode not init");
 	}
 	return 0;
@@ -313,6 +317,10 @@ void HUST_fs_convert_inode(struct HUST_inode *H_inode, struct inode *vfs_inode)
 	vfs_inode->i_ino = H_inode->inode_no;
 	vfs_inode->i_mode = H_inode->mode;
 	vfs_inode->i_size = H_inode->file_size;
+    set_nlink(vfs_inode, H_inode->i_nlink);
+    i_uid_write(vfs_inode, H_inode->i_uid);
+    i_gid_write(vfs_inode, H_inode->i_gid);
+    
 	//vfs_inode->i_private = *H_inode;
 }
 
@@ -370,20 +378,15 @@ struct dentry *HUST_fs_lookup(struct inode *parent_inode,
 				}
 
 				HUST_fs_convert_inode(&H_child_inode, inode);
-
+                printk(KERN_ERR "uid is %lu and gid is %lu", inode->i_uid, inode->i_gid);
 				inode->i_op = &HUST_fs_inode_ops;
 
 				if (S_ISDIR(H_child_inode.mode)) {
-					printk(KERN_ERR "in case a");
 					inode->i_fop = &HUST_fs_dir_ops;
 				} else if (S_ISREG(H_child_inode.mode)) {
-
-					printk(KERN_ERR "in case b");
 					inode->i_fop = &HUST_fs_file_ops;;
 					inode->i_mapping->a_ops = &HUST_fs_aops;
 				}
-
-					printk(KERN_ERR "in case c");
 				inode->i_mode = H_child_inode.mode;
                 inode->i_size = H_child_inode.file_size;
 				insert_inode_hash(inode);

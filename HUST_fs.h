@@ -40,6 +40,10 @@ struct HUST_inode {
 		uint64_t file_size;
 		uint64_t dir_children_count;
 	};
+    int32_t i_uid; 
+    int32_t i_gid;
+    int32_t i_nlink;
+    char padding[8];
 };
 
 #define HUST_INODE_SIZE sizeof(struct HUST_inode)
@@ -69,8 +73,7 @@ int alloc_block_for_inode(struct super_block* sb, struct HUST_inode* p_H_inode, 
 ssize_t HUST_read_inode_data(struct inode* inode,void* buf, size_t size);
 ssize_t HUST_write_inode_data(struct inode* inode, const void *buf, size_t count);
 int save_inode(struct super_block* sb, struct HUST_inode H_inode);
-int HUST_fs_get_inode(struct super_block *sb,
-		uint64_t inode_no, struct HUST_inode* inode);
+int HUST_fs_get_inode(struct super_block* sb, uint64_t inode_no, struct HUST_inode* raw_inode);
 
 //file operations
 int HUST_fs_readpage(struct file *file, struct page *page);
