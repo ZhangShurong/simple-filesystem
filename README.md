@@ -21,7 +21,7 @@ $ cat file
 ## Disk layout
 
 Dummy block | Super block | bmap | imap |inode table | data block0 | data block1 | ... ...
-| :-: | -:| -:| -:| -:| -:| -:
+|---|---|---|---|---|---|---
 
 You will see it clearly on mkfs.c
 
