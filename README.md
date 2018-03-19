@@ -21,12 +21,12 @@ $ cat file
 ## Disk layout
 
 Dummy block | Super block | bmap | imap |inode table | data block0 | data block1 | ... ...
-- | :-: | -:| -:| -:| -:| -:| -:
+| :-: | -:| -:| -:| -:| -:| -:
 
 You will see it clearly on mkfs.c
 
 # TODO
--[ ] fix bug: vim e667  
--[ ] code refactoring
+- [ ] fix bug: vim e667  
+- [ ] code refactoring
 
 # [How to write a simple filesystem?](https://zhangshurong.github.io/)   
