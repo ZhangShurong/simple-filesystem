@@ -1,5 +1,8 @@
 # HUST_fs
+Author: HUST 2015 IS03 ChenWei
+
 A filesystem driver for linux.
+
 
 ## How to use this?
 1. Compile  
