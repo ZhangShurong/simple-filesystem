@@ -1,3 +1,5 @@
+/* Bitmap helpers and on-disk map operations (bmap/imap). */
+
 #include "constants.h"
 #include "HUST_fs.h"
 
@@ -23,21 +25,40 @@ int HUST_find_first_zero_bit(const void *vaddr, unsigned size)
 	num = *--p;
 	return ((p - addr) << 4) + ffz(num);
 }
+
+static inline ssize_t HUST_bmap_bytes(const struct HUST_fs_super_block *disk_sb)
+{
+	/* bmap spans [bmap_block, imap_block). */
+	return (ssize_t)(disk_sb->imap_block - disk_sb->bmap_block) * HUST_BLOCKSIZE;
+}
+
+static inline ssize_t HUST_imap_bytes(const struct HUST_fs_super_block *disk_sb)
+{
+	/* imap spans [imap_block, inode_table_block). */
+	return (ssize_t)(disk_sb->inode_table_block - disk_sb->imap_block) * HUST_BLOCKSIZE;
+}
 uint64_t HUST_fs_get_empty_inode(struct super_block* sb)
 {
     struct HUST_fs_super_block *disk_sb = sb->s_fs_info;
-    //read imap
-    
-    ssize_t imap_size = disk_sb->blocks_count / 8;
-	
-	uint8_t *imap = kmalloc(imap_size, GFP_KERNEL);
+	ssize_t imap_size;
+	uint8_t *imap;
+
+	if (!disk_sb)
+		return -EFAULT;
+	/* read imap */
+	imap_size = HUST_imap_bytes(disk_sb);
+	if (imap_size <= 0)
+		return -EFAULT;
+
+	imap = kmalloc(imap_size, GFP_KERNEL);
     if(0!=get_imap(sb, imap, imap_size))
     {
         kfree(imap);
         return -EFAULT;
     }
-	
-	uint64_t empty_ilock_num = HUST_find_first_zero_bit(imap, disk_sb->blocks_count / 8);
+
+	/* HUST_find_first_zero_bit expects size in bits. */
+	uint64_t empty_ilock_num = HUST_find_first_zero_bit(imap, disk_sb->inodes_count);
 	printk(KERN_INFO "HUST_find_first_zero_bit at %llu\n",
 	       empty_ilock_num);
     kfree(imap);
@@ -52,7 +73,7 @@ int get_imap(struct super_block* sb, uint8_t* imap, ssize_t imap_size)
     //read imap
 	uint64_t i;
 	for (i = disk_sb->imap_block;
-	     i < disk_sb->data_block_number && imap_size != 0; ++i) {
+	     i < disk_sb->inode_table_block && imap_size != 0; ++i) {
         
 		struct buffer_head *bh;
 		bh = sb_bread(sb, i);
@@ -104,16 +125,22 @@ int get_bmap(struct super_block* sb, uint8_t* bmap, ssize_t bmap_size)
 uint64_t HUST_fs_get_empty_block(struct super_block* sb)
 {
 	struct HUST_fs_super_block *disk_sb = sb->s_fs_info;
-	
-	//read imap
-	uint64_t bmap_empty = disk_sb->blocks_count / 8;
-	printk(KERN_INFO "bmap_empty is %llu\n", bmap_empty);
-	uint8_t *bmap = kmalloc(bmap_empty, GFP_KERNEL);
-    if(get_bmap(sb, bmap, bmap_empty)!=0) {
+	ssize_t bmap_size;
+	uint8_t *bmap;
+
+	if (!disk_sb)
+		return -EFAULT;
+	/* read bmap */
+	bmap_size = HUST_bmap_bytes(disk_sb);
+	if (bmap_size <= 0)
+		return -EFAULT;
+	bmap = kmalloc(bmap_size, GFP_KERNEL);
+	if(get_bmap(sb, bmap, bmap_size)!=0) {
         kfree(bmap);
         return -EFAULT;
     }
-	uint64_t empty_block_num = HUST_find_first_zero_bit(bmap, disk_sb->blocks_count / 8);
+	/* HUST_find_first_zero_bit expects size in bits. */
+	uint64_t empty_block_num = HUST_find_first_zero_bit(bmap, disk_sb->blocks_count);
 	printk(KERN_INFO "HUST_find_first_zero_bit at %llu\n",
 	       empty_block_num);
     kfree(bmap);
@@ -146,23 +173,34 @@ int set_and_save_imap(struct super_block* sb, uint64_t inode_num, uint8_t value)
     else{
         printk(KERN_ERR "value error\n");
     }
-    map_bh(bh, sb, block_idx);
-    brelse(bh);
+	mark_buffer_dirty(bh);
+	sync_dirty_buffer(bh);
+	brelse(bh);
     return 0;
 }
 int save_bmap(struct super_block* sb, uint8_t* bmap, ssize_t bmap_size)
 {
-    struct HUST_fs_super_block *disk_sb = sb->s_fs_info;
-    uint64_t block_idx = disk_sb->bmap_block;
-    struct buffer_head* bh;
-    bh = sb_bread(sb, block_idx);
-    
-    printk(KERN_ERR "In save bmap\n");
-    memcpy(bh->b_data, bmap, bmap_size);
-    
-    map_bh(bh, sb, block_idx);
-    brelse(bh);
-    return 0;
+	struct HUST_fs_super_block *disk_sb = sb->s_fs_info;
+	uint64_t blk;
+	ssize_t off = 0;
+
+	if (!disk_sb || !bmap)
+		return -EFAULT;
+
+	for (blk = disk_sb->bmap_block;
+	     blk < disk_sb->imap_block && off < bmap_size; ++blk) {
+		struct buffer_head* bh;
+		ssize_t n = min_t(ssize_t, HUST_BLOCKSIZE, bmap_size - off);
+		bh = sb_bread(sb, blk);
+		if (!bh)
+			return -EIO;
+		memcpy(bh->b_data, bmap + off, n);
+		mark_buffer_dirty(bh);
+		sync_dirty_buffer(bh);
+		brelse(bh);
+		off += n;
+	}
+	return 0;
 }
 int set_and_save_bmap(struct super_block* sb, uint64_t block_num, uint8_t value)
 {
@@ -189,7 +227,8 @@ int set_and_save_bmap(struct super_block* sb, uint64_t block_num, uint8_t value)
     else{
         printk(KERN_ERR "value error\n");
     }
-    map_bh(bh, sb, block_idx);
-    brelse(bh);
+	mark_buffer_dirty(bh);
+	sync_dirty_buffer(bh);
+	brelse(bh);
     return 0;
 }

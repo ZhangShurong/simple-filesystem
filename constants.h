@@ -1,3 +1,5 @@
+/* Project-wide filesystem constants (on-disk format). */
+
 #ifndef CONSTANT_H
 #define CONSTANT_H
 

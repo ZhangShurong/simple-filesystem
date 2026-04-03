@@ -292,7 +292,7 @@ int main(int argc, char *argv[])
 		perror("Error opening the device");
 		return -1;
 	}
-	ret = 1;
+	ret = 0;
 
 	init_disk(fd, argv[1]);
 	write_dummy(fd);
@@ -304,5 +304,5 @@ int main(int argc, char *argv[])
 //	write_welcome_file(fd);
 
 	close(fd);
-	return ret;
+	return (int)ret;
 }

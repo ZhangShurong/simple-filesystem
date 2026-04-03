@@ -4,8 +4,6 @@
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/fs.h>
-#include <linux/init.h>
-#include <linux/module.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
 #include <linux/buffer_head.h>
@@ -16,6 +14,7 @@
 #define clearbit(number, x) number &= ~(1UL << x)
 
 
+/** On-disk superblock (block 1). */
 struct HUST_fs_super_block {
 	uint64_t version;
 	uint64_t magic;
@@ -31,6 +30,7 @@ struct HUST_fs_super_block {
 	char padding[4016];
 };
 
+/** On-disk inode. */
 struct HUST_inode {
 	mode_t mode; //sizeof(mode_t) is 4
 	uint64_t inode_no;
@@ -50,12 +50,13 @@ struct HUST_inode {
 };
 
 #define HUST_INODE_SIZE sizeof(struct HUST_inode)
+/** Directory entry record stored in data blocks. */
 struct HUST_dir_record {
 	char filename[HUST_FILENAME_MAX_LEN];
 	uint64_t inode_no;
 };
 
-//inode_map anf block_map
+/* inode_map and block_map */
 int checkbit(uint8_t number, int x);
 int HUST_find_first_zero_bit(const void *vaddr, unsigned size);
 int get_bmap(struct super_block* sb, uint8_t* bmap, ssize_t bmap_size);
@@ -66,19 +67,20 @@ int save_bmap(struct super_block* sb, uint8_t* bmap, ssize_t bmap_size);
 int set_and_save_imap(struct super_block* sb, uint64_t inode_num, uint8_t value);
 int set_and_save_bmap(struct super_block* sb, uint64_t block_num, uint8_t value);
 
-//block oprations
+/* block operations */
 int save_block(struct super_block* sb, uint64_t block_num, void* buf, ssize_t size);
 int HUST_fs_get_block(struct inode *inode, sector_t block,
                        struct buffer_head *bh, int create);
-int alloc_block_for_inode(struct super_block* sb, struct HUST_inode* p_H_inode, ssize_t size);
+/* Allocate blocks so that p_H_inode->blocks reaches target_blocks. */
+int alloc_block_for_inode(struct super_block* sb, struct HUST_inode* p_H_inode, ssize_t target_blocks);
 
-//inode oprerations
+/* inode operations */
 ssize_t HUST_read_inode_data(struct inode* inode,void* buf, size_t size);
 ssize_t HUST_write_inode_data(struct inode* inode, const void *buf, size_t count);
 int save_inode(struct super_block* sb, struct HUST_inode H_inode);
 int HUST_fs_get_inode(struct super_block* sb, uint64_t inode_no, struct HUST_inode* raw_inode);
 
-//file operations
+/* file operations */
 int HUST_fs_readpage(struct file *file, struct page *page);
 int HUST_fs_writepage(struct page* page, struct writeback_control* wbc);
 int HUST_fs_write_begin(struct file* file, struct address_space* mapping, 
@@ -86,7 +88,7 @@ int HUST_fs_write_begin(struct file* file, struct address_space* mapping,
 		struct page** pagep, void** fsdata);
 
 
-//dir operations
+/* dir operations */
 int HUST_fs_iterate(struct file *filp, struct dir_context *ctx);
 int HUST_fs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode);
 int HUST_fs_create(struct inode *dir, struct dentry *dentry, umode_t mode,bool excl);
@@ -98,13 +100,13 @@ int HUST_fs_unlink(struct inode *dir, struct dentry *dentry);
 struct dentry* HUST_fs_lookup(struct inode *parent_inode, struct dentry *child_dentry,
     unsigned int flags);
 
-//super_block operations
+/* super_block operations */
 int save_super(struct super_block* sb);
 int HUST_fs_fill_super(struct super_block *sb, void *data, int silent);
 int HUST_write_inode(struct inode *inode, struct writeback_control *wbc);
 void HUST_evict_inode(struct inode *vfs_inode);
 
-//file-system operations
+/* file-system operations */
 struct dentry* HUST_fs_mount(struct file_system_type *fs_type, int flags,
                   const char *dev_name, void *data);
 void HUST_fs_kill_superblock(struct super_block *s);

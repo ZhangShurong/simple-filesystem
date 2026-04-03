@@ -1,3 +1,11 @@
+/*
+ * HUST_fs: a simple block-based filesystem (teaching project).
+ *
+ * Notes:
+ * - On-disk superblock lives at block 1.
+ * - Never store pointers into buffer_head->b_data in sb->s_fs_info.
+ */
+
 #include "HUST_fs.h"
 #include "constants.h"
 
@@ -44,13 +52,20 @@ const struct address_space_operations HUST_fs_aops = {
 
 int save_super(struct super_block* sb)
 {
-    struct HUST_fs_super_block *disk_sb = sb->s_fs_info;
-    struct buffer_head* bh;
-    bh = sb_bread(sb, 1);
-    printk(KERN_ERR "In save bmap\n");
-    memcpy(bh->b_data, disk_sb, HUST_BLOCKSIZE);
-    map_bh(bh, sb, 1);
-    brelse(bh);
+	struct HUST_fs_super_block *disk_sb = sb->s_fs_info;
+	struct buffer_head* bh;
+
+	if (!disk_sb)
+		return -EFAULT;
+
+	bh = sb_bread(sb, 1);
+	if (!bh)
+		return -EIO;
+
+	memcpy(bh->b_data, disk_sb, sizeof(*disk_sb));
+	mark_buffer_dirty(bh);
+	sync_dirty_buffer(bh);
+	brelse(bh);
 	return 0;
 }
 
@@ -58,10 +73,18 @@ int HUST_fs_fill_super(struct super_block *sb, void *data, int silent)
 {
 	int ret = -EPERM;
 	struct buffer_head *bh;
+	struct HUST_fs_super_block *sb_disk = NULL;
+
 	bh = sb_bread(sb, 1);
-	BUG_ON(!bh);
-	struct HUST_fs_super_block *sb_disk;
-	sb_disk = (struct HUST_fs_super_block *)bh->b_data;
+	if (!bh)
+		return -EIO;
+
+	sb_disk = kzalloc(sizeof(*sb_disk), GFP_KERNEL);
+	if (!sb_disk) {
+		ret = -ENOMEM;
+		goto release;
+	}
+	memcpy(sb_disk, bh->b_data, sizeof(*sb_disk));
 
 	printk(KERN_INFO "HUST_fs: version num is %lu\n", sb_disk->version);
 	printk(KERN_INFO "HUST_fs: magic num is %lu\n", sb_disk->magic);
@@ -76,17 +99,22 @@ int HUST_fs_fill_super(struct super_block *sb, void *data, int silent)
 
 	if (sb_disk->magic != MAGIC_NUM) {
 		printk(KERN_ERR "Magic number not match!\n");
+		ret = -EINVAL;
 		goto release;
 	}
 
 	struct inode *root_inode;
 
-	if (sb_disk->block_size != 4096) {
+	if (sb_disk->block_size != HUST_BLOCKSIZE) {
 		printk(KERN_ERR "HUST_fs expects a blocksize of %d\n", 4096);
 		ret = -EFAULT;
 		goto release;
 	}
-	//fill vfs super block
+	if (!sb_set_blocksize(sb, HUST_BLOCKSIZE)) {
+		ret = -EFAULT;
+		goto release;
+	}
+	/* Fill VFS super block. */
 	sb->s_magic = sb_disk->magic;
 	sb->s_fs_info = sb_disk;
 	sb->s_maxbytes = HUST_BLOCKSIZE * HUST_N_BLOCKS;	/* Max file size */
@@ -102,8 +130,10 @@ int HUST_fs_fill_super(struct super_block *sb, void *data, int silent)
 	//-----------end test-----------
 
 	root_inode = new_inode(sb);
-	if (!root_inode)
-		return -ENOMEM;
+	if (!root_inode) {
+		ret = -ENOMEM;
+		goto release;
+	}
 
 	/* Our root inode. It doesn't contain useful information for now.
 	 * Note that i_ino must not be 0, since valid inode numbers start at
@@ -133,12 +163,18 @@ int HUST_fs_fill_super(struct super_block *sb, void *data, int silent)
 	/* Make a struct dentry from our inode and store it in our
 	 * superblock. */
 	sb->s_root = d_make_root(root_inode);
-	if (!sb->s_root)
-		return -ENOMEM;
+	if (!sb->s_root) {
+		ret = -ENOMEM;
+		goto release;
+	}
  release:
-	brelse(bh);
-
-	return 0;
+	if (bh)
+		brelse(bh);
+	if (ret) {
+		kfree(sb_disk);
+		sb->s_fs_info = NULL;
+	}
+	return ret;
 }
 
 struct dentry *HUST_fs_mount(struct file_system_type *fs_type, int flags,
@@ -162,6 +198,9 @@ struct dentry *HUST_fs_mount(struct file_system_type *fs_type, int flags,
 
 void HUST_fs_kill_superblock(struct super_block *s)
 {
+	/* Free private superblock copy. */
+	kfree(s->s_fs_info);
+	s->s_fs_info = NULL;
 	/* We don't do anything here, but it's important to call
 	 * kill_block_super because it frees some internal resources. */
 	kill_block_super(s);

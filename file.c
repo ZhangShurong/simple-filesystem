@@ -1,3 +1,5 @@
+/* File + directory operations. */
+
 #include "HUST_fs.h"
 #include "constants.h"
 
@@ -48,41 +50,34 @@ int HUST_fs_iterate(struct file *filp, struct dir_context *ctx)
 		return 0;
 	}
 
-	uint64_t i, dir_unread;
-	dir_unread = H_inode.dir_children_count;
-	printk(KERN_INFO "HUST_fs: dir_unread [%llu]\n", dir_unread);
-	if (dir_unread == 0) {
+	uint64_t total = H_inode.dir_children_count;
+	uint64_t idx;
+
+	printk(KERN_INFO "HUST_fs: dir entries total [%llu]\n", total);
+	if (total == 0) {
 		return 0;
 	}
 
-	struct HUST_dir_record *dir_arr =
-	    kmalloc(sizeof(struct HUST_dir_record) * dir_unread, GFP_KERNEL);
+	for (idx = ctx->pos; idx < total; ++idx) {
+		uint64_t byte_off = idx * sizeof(struct HUST_dir_record);
+		uint64_t blk_idx = byte_off / HUST_BLOCKSIZE;
+		uint64_t in_blk_off = byte_off % HUST_BLOCKSIZE;
+		struct buffer_head *bh;
+		struct HUST_dir_record rec;
 
-	struct buffer_head *bh;
-	for (i = 0; (i < H_inode.blocks) && (dir_unread > 0); ++i) {
-		bh = sb_bread(sb, H_inode.block[i]);
-		uint64_t len = dir_unread * sizeof(struct HUST_dir_record);
-		uint64_t off = H_inode.dir_children_count - dir_unread;
-		if (len < HUST_BLOCKSIZE) {	//read over
-			memcpy(dir_arr + (off * sizeof(struct HUST_dir_record)),
-			       bh->b_data, len);
-			dir_unread = 0;
-		} else {
-			memcpy(dir_arr + (off * sizeof(struct HUST_dir_record)),
-			       bh->b_data, HUST_BLOCKSIZE);
-			dir_unread -=
-			    HUST_BLOCKSIZE / sizeof(struct HUST_dir_record);
-		}
+		if (blk_idx >= H_inode.blocks)
+			break;
+		bh = sb_bread(sb, H_inode.block[blk_idx]);
+		if (!bh)
+			return -EIO;
+		memcpy(&rec, bh->b_data + in_blk_off, sizeof(rec));
 		brelse(bh);
-	}
-	for (i = 0; i < H_inode.dir_children_count; ++i) {
-		printk(KERN_INFO " dir_arr[i].filename is %s\n",
-		       dir_arr[i].filename);
-		dir_emit(ctx, dir_arr[i].filename, strlen(dir_arr[i].filename),
-			 dir_arr[i].inode_no, DT_REG);
+
+		if (!dir_emit(ctx, rec.filename, strnlen(rec.filename, HUST_FILENAME_MAX_LEN),
+			     rec.inode_no, DT_UNKNOWN))
+			break;
 		ctx->pos++;
 	}
-	kfree(dir_arr);
 	printk(KERN_INFO "ctx->pos is %llu\n", ctx->pos);
 	return 0;
 }
